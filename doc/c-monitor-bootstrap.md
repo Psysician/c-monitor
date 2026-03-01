@@ -36,3 +36,10 @@ This repository was bootstrapped as a fork workspace from
   - reader, processors, and pricing normalize Claude/Codex into shared `UsageEntry`
   - analysis path uses compact raw payloads for Claude-only limit detection to reduce memory overhead
   - mixed-provider normalization and codex fallback behavior are covered by tests
+- M-003 complete:
+  - realtime data manager applies bounded per-block entry retention for lower steady-state memory
+  - monitoring orchestrators emit `rss_current`, `rss_peak`, and `rss_p95` telemetry in payload metadata
+  - memory budget evaluation (`rss_p95 <= 80 MB`) is surfaced with warning logs when exceeded
+- M-004 bootstrap docs added:
+  - `doc/memory-benchmark-plan.md` defines benchmark workloads and pass/fail thresholds
+  - `doc/provider-compatibility-matrix.md` captures claude/codex/both compatibility status

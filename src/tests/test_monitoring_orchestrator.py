@@ -334,6 +334,10 @@ class TestMonitoringOrchestratorFetchAndProcess:
         with patch(
             "claude_monitor.monitoring.orchestrator.get_token_limit",
             return_value=200000,
+        ), patch.object(
+            orchestrator,
+            "_capture_memory_metrics",
+            return_value={"rss_p95_mb": 10.0, "within_budget": True},
         ):
             result = orchestrator._fetch_and_process_data()
 
@@ -343,6 +347,8 @@ class TestMonitoringOrchestratorFetchAndProcess:
         assert result["args"] == args
         assert result["session_id"] == "session_1"
         assert result["session_count"] == 1
+        assert result["memory"]["rss_p95_mb"] == 10.0
+        assert result["data"]["metadata"]["memory"]["within_budget"] is True
         assert orchestrator._last_valid_data == result
 
     def test_fetch_and_process_no_data(
@@ -795,6 +801,49 @@ class TestMultiProviderMonitoringOrchestrator:
         assert {block["provider"] for block in merged_blocks} == {"claude", "codex"}
         for block in merged_blocks:
             assert block["entries"][0]["provider"] == block["provider"]
+
+    def test_merge_memory_metrics(self) -> None:
+        """Merged output should keep max RSS metrics and provider breakdown."""
+        with patch(
+            "claude_monitor.monitoring.orchestrator.MonitoringOrchestrator",
+            side_effect=[Mock(), Mock()],
+        ):
+            orchestrator = MultiProviderMonitoringOrchestrator(
+                provider_configs={"claude": "/tmp/claude", "codex": "/tmp/codex"}
+            )
+
+        merged_memory = orchestrator._merge_memory_metrics(
+            {
+                "claude": {
+                    "memory": {
+                        "rss_current_mb": 40.0,
+                        "rss_peak_mb": 50.0,
+                        "rss_p95_mb": 45.0,
+                        "rss_current_bytes": 400,
+                        "rss_peak_bytes": 500,
+                        "rss_p95_bytes": 450,
+                        "sample_count": 5,
+                    }
+                },
+                "codex": {
+                    "memory": {
+                        "rss_current_mb": 42.0,
+                        "rss_peak_mb": 52.0,
+                        "rss_p95_mb": 47.0,
+                        "rss_current_bytes": 420,
+                        "rss_peak_bytes": 520,
+                        "rss_p95_bytes": 470,
+                        "sample_count": 8,
+                    }
+                },
+            }
+        )
+
+        assert merged_memory["rss_current_mb"] == 42.0
+        assert merged_memory["rss_peak_mb"] == 52.0
+        assert merged_memory["rss_p95_mb"] == 47.0
+        assert merged_memory["sample_count"] == 8
+        assert set(merged_memory["provider_memory"].keys()) == {"claude", "codex"}
 
 
 class TestMonitoringOrchestratorThreadSafety:

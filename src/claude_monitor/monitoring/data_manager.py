@@ -13,12 +13,16 @@ logger = logging.getLogger(__name__)
 class DataManager:
     """Manages data fetching and caching for monitoring."""
 
+    DEFAULT_MAX_ENTRIES_PER_BLOCK = 200
+
     def __init__(
         self,
         cache_ttl: int = 30,
         hours_back: int = 192,
         data_path: Optional[str] = None,
         provider: str = "claude",
+        max_entries_per_block: int = DEFAULT_MAX_ENTRIES_PER_BLOCK,
+        retain_entries_for_inactive_blocks: bool = False,
     ) -> None:
         """Initialize data manager with cache and fetch settings.
 
@@ -27,6 +31,8 @@ class DataManager:
             hours_back: Hours of historical data to fetch
             data_path: Path to data directory
             provider: Provider name (claude or codex)
+            max_entries_per_block: Max entries retained per block in memory
+            retain_entries_for_inactive_blocks: Keep entries on inactive blocks
         """
         self.cache_ttl: int = cache_ttl
         self._cache: Optional[Dict[str, Any]] = None
@@ -35,6 +41,10 @@ class DataManager:
         self.hours_back: int = hours_back
         self.data_path: Optional[str] = data_path
         self.provider: str = provider
+        self.max_entries_per_block: int = max_entries_per_block
+        self.retain_entries_for_inactive_blocks: bool = (
+            retain_entries_for_inactive_blocks
+        )
         self._last_error: Optional[str] = None
         self._last_successful_fetch: Optional[float] = None
 
@@ -64,6 +74,11 @@ class DataManager:
                     use_cache=False,
                     data_path=self.data_path,
                     provider=self.provider,
+                    include_entries=True,
+                    max_entries_per_block=self.max_entries_per_block,
+                    retain_entries_for_inactive_blocks=(
+                        self.retain_entries_for_inactive_blocks
+                    ),
                 )
 
                 if data is not None:

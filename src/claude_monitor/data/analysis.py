@@ -21,6 +21,9 @@ def analyze_usage(
     quick_start: bool = False,
     data_path: Optional[str] = None,
     provider: str = "claude",
+    include_entries: bool = True,
+    max_entries_per_block: Optional[int] = None,
+    retain_entries_for_inactive_blocks: bool = True,
 ) -> Dict[str, Any]:
     """
     Main entry point to generate response_final.json.
@@ -37,6 +40,9 @@ def analyze_usage(
         quick_start: Use minimal data for quick startup (last 24h only)
         data_path: Optional path to provider data directory
         provider: Provider name (claude or codex)
+        include_entries: Include per-entry arrays in block payloads
+        max_entries_per_block: Cap number of retained entries per block
+        retain_entries_for_inactive_blocks: Keep entries for inactive blocks
 
     Returns:
         Dictionary with analyzed blocks
@@ -99,9 +105,20 @@ def analyze_usage(
         "cache_used": use_cache,
         "quick_start": quick_start,
         "provider": provider,
+        "entry_retention": {
+            "include_entries": include_entries,
+            "max_entries_per_block": max_entries_per_block,
+            "retain_entries_for_inactive_blocks": retain_entries_for_inactive_blocks,
+        },
     }
 
     result = _create_result(blocks, entries, metadata)
+    _apply_entry_retention_policy(
+        result["blocks"],
+        include_entries=include_entries,
+        max_entries_per_block=max_entries_per_block,
+        retain_entries_for_inactive_blocks=retain_entries_for_inactive_blocks,
+    )
     logger.info(f"analyze_usage returning {len(result['blocks'])} blocks")
     return result
 
@@ -241,3 +258,31 @@ def _add_optional_block_data(block: SessionBlock, block_dict: Dict[str, Any]) ->
 
     if hasattr(block, "limit_messages") and block.limit_messages:
         block_dict["limitMessages"] = block.limit_messages
+
+
+def _apply_entry_retention_policy(
+    blocks_data: List[Dict[str, Any]],
+    include_entries: bool,
+    max_entries_per_block: Optional[int],
+    retain_entries_for_inactive_blocks: bool,
+) -> None:
+    """Apply entry-retention policy in-place to block dictionaries."""
+    max_entries = max_entries_per_block if max_entries_per_block is not None else -1
+
+    for block in blocks_data:
+        entries = block.get("entries")
+        if not isinstance(entries, list):
+            continue
+
+        is_active = bool(block.get("isActive", False))
+
+        if not include_entries:
+            block["entries"] = []
+            continue
+
+        if not is_active and not retain_entries_for_inactive_blocks:
+            block["entries"] = []
+            continue
+
+        if max_entries >= 0 and len(entries) > max_entries:
+            block["entries"] = [] if max_entries == 0 else entries[-max_entries:]

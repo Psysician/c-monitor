@@ -238,6 +238,106 @@ class TestAnalyzeUsage:
         assert result["metadata"]["provider"] == "codex"
         mock_analyzer.detect_limits.assert_not_called()
 
+    @patch("claude_monitor.data.analysis.load_usage_entries")
+    @patch("claude_monitor.data.analysis.SessionAnalyzer")
+    @patch("claude_monitor.data.analysis.BurnRateCalculator")
+    def test_analyze_usage_retains_only_active_entries_when_configured(
+        self, mock_calc_class: Mock, mock_analyzer_class: Mock, mock_load: Mock
+    ) -> None:
+        """Retention policy should drop inactive entries and cap active entries."""
+        entries = [
+            UsageEntry(
+                timestamp=datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc),
+                input_tokens=10,
+                output_tokens=5,
+                model="claude-3-haiku",
+            ),
+            UsageEntry(
+                timestamp=datetime(2024, 1, 1, 12, 1, tzinfo=timezone.utc),
+                input_tokens=11,
+                output_tokens=6,
+                model="claude-3-haiku",
+            ),
+            UsageEntry(
+                timestamp=datetime(2024, 1, 1, 12, 2, tzinfo=timezone.utc),
+                input_tokens=12,
+                output_tokens=7,
+                model="claude-3-haiku",
+            ),
+        ]
+
+        active_block = SessionBlock(
+            id="active",
+            start_time=datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc),
+            end_time=datetime(2024, 1, 1, 17, 0, tzinfo=timezone.utc),
+            is_active=True,
+            token_counts=TokenCounts(input_tokens=33, output_tokens=18),
+            cost_usd=0.01,
+            entries=list(entries),
+        )
+        inactive_block = SessionBlock(
+            id="inactive",
+            start_time=datetime(2024, 1, 1, 6, 0, tzinfo=timezone.utc),
+            end_time=datetime(2024, 1, 1, 11, 0, tzinfo=timezone.utc),
+            is_active=False,
+            token_counts=TokenCounts(input_tokens=33, output_tokens=18),
+            cost_usd=0.01,
+            entries=list(entries),
+        )
+
+        mock_load.return_value = (entries, [])
+        mock_analyzer = Mock()
+        mock_analyzer.transform_to_blocks.return_value = [active_block, inactive_block]
+        mock_analyzer.detect_limits.return_value = []
+        mock_analyzer_class.return_value = mock_analyzer
+        mock_calc_class.return_value = Mock()
+
+        result = analyze_usage(
+            max_entries_per_block=2,
+            retain_entries_for_inactive_blocks=False,
+        )
+
+        assert len(result["blocks"][0]["entries"]) == 2
+        assert len(result["blocks"][1]["entries"]) == 0
+        assert result["metadata"]["entry_retention"] == {
+            "include_entries": True,
+            "max_entries_per_block": 2,
+            "retain_entries_for_inactive_blocks": False,
+        }
+
+    @patch("claude_monitor.data.analysis.load_usage_entries")
+    @patch("claude_monitor.data.analysis.SessionAnalyzer")
+    @patch("claude_monitor.data.analysis.BurnRateCalculator")
+    def test_analyze_usage_can_drop_entries_from_payload(
+        self, mock_calc_class: Mock, mock_analyzer_class: Mock, mock_load: Mock
+    ) -> None:
+        """include_entries=False should remove entry arrays from the result payload."""
+        sample_entry = UsageEntry(
+            timestamp=datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc),
+            input_tokens=100,
+            output_tokens=50,
+            cost_usd=0.001,
+            model="claude-3-haiku",
+        )
+        sample_block = SessionBlock(
+            id="block_1",
+            start_time=datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc),
+            end_time=datetime(2024, 1, 1, 17, 0, tzinfo=timezone.utc),
+            token_counts=TokenCounts(input_tokens=100, output_tokens=50),
+            cost_usd=0.001,
+            entries=[sample_entry],
+        )
+
+        mock_load.return_value = ([sample_entry], [])
+        mock_analyzer = Mock()
+        mock_analyzer.transform_to_blocks.return_value = [sample_block]
+        mock_analyzer.detect_limits.return_value = []
+        mock_analyzer_class.return_value = mock_analyzer
+        mock_calc_class.return_value = Mock()
+
+        result = analyze_usage(include_entries=False)
+        assert result["blocks"][0]["entries"] == []
+
 
 class TestProcessBurnRates:
     """Test the _process_burn_rates function."""

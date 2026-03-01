@@ -200,7 +200,7 @@ claude-monitor --help
 | --plan | string | custom | Plan type: pro, max5, max20, or custom |
 | --custom-limit-tokens | int | None | Token limit for custom plan (must be > 0) |
 | --view | string | realtime | View type: realtime, daily, or monthly |
-| --provider | string | claude | Data provider: claude or codex |
+| --provider | string | claude | Data provider: claude, codex, or both |
 | --provider-data-path | path | None | Override provider data directory |
 | --timezone | string | auto | Timezone (auto-detected). Examples: UTC, America/New_York, Europe/London |
 | --time-format | string | auto | Time format: 12h, 24h, or auto |
@@ -235,7 +235,7 @@ The tool can be invoked using any of these commands:
 
 Provider compatibility note:
 - `--provider` defaults to `claude` for backward-compatible startup behavior.
-- Existing command aliases keep the same entrypoint and can be used with either `--provider claude` or `--provider codex`.
+- Existing command aliases keep the same entrypoint and can be used with `--provider claude`, `--provider codex`, or `--provider both`.
 
 #### Save Flags Feature
 

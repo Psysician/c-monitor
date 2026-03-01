@@ -8,6 +8,10 @@ from typing import Any, Callable, Dict, List, Optional
 from claude_monitor.core.plans import DEFAULT_TOKEN_LIMIT, get_token_limit
 from claude_monitor.error_handling import report_error
 from claude_monitor.monitoring.data_manager import DataManager
+from claude_monitor.monitoring.memory_metrics import (
+    MemoryMetricsTracker,
+    evaluate_memory_budget,
+)
 from claude_monitor.monitoring.session_monitor import SessionMonitor
 
 logger = logging.getLogger(__name__)
@@ -21,6 +25,7 @@ class MonitoringOrchestrator:
         update_interval: int = 10,
         data_path: Optional[str] = None,
         provider: str = "claude",
+        memory_budget_mb: float = 80.0,
     ) -> None:
         """Initialize orchestrator with components.
 
@@ -28,13 +33,16 @@ class MonitoringOrchestrator:
             update_interval: Seconds between updates
             data_path: Optional path to provider data directory
             provider: Provider name (claude or codex)
+            memory_budget_mb: Target RSS p95 budget in MB
         """
         self.update_interval: int = update_interval
+        self.memory_budget_mb: float = memory_budget_mb
 
         self.data_manager: DataManager = DataManager(
             cache_ttl=5, data_path=data_path, provider=provider
         )
         self.session_monitor: SessionMonitor = SessionMonitor()
+        self.memory_tracker: MemoryMetricsTracker = MemoryMetricsTracker()
 
         self._monitoring: bool = False
         self._monitor_thread: Optional[threading.Thread] = None
@@ -174,6 +182,8 @@ class MonitoringOrchestrator:
 
             # Calculate token limit
             token_limit: int = self._calculate_token_limit(data)
+            memory = self._capture_memory_metrics()
+            self._attach_memory_metadata(data, memory)
 
             # Prepare monitoring data
             monitoring_data: Dict[str, Any] = {
@@ -182,6 +192,7 @@ class MonitoringOrchestrator:
                 "args": self._args,
                 "session_id": self.session_monitor.current_session_id,
                 "session_count": self.session_monitor.session_count,
+                "memory": memory,
             }
 
             # Store last valid data
@@ -214,6 +225,26 @@ class MonitoringOrchestrator:
                 exception=e, component="orchestrator", context_name="monitoring_cycle"
             )
             return None
+
+    def _capture_memory_metrics(self) -> Dict[str, Any]:
+        """Capture memory metrics and evaluate p95 budget compliance."""
+        memory_metrics = self.memory_tracker.sample_and_get_metrics()
+        budget = evaluate_memory_budget(memory_metrics, budget_mb=self.memory_budget_mb)
+        memory = {**memory_metrics, **budget}
+
+        if not budget["within_budget"]:
+            logger.warning(
+                "Memory budget exceeded: rss_p95_mb=%.3f budget_mb=%.3f",
+                budget["rss_p95_mb"],
+                budget["budget_mb"],
+            )
+        return memory
+
+    def _attach_memory_metadata(self, data: Dict[str, Any], memory: Dict[str, Any]) -> None:
+        """Attach memory metrics to analysis metadata for observability."""
+        metadata = data.setdefault("metadata", {})
+        if isinstance(metadata, dict):
+            metadata["memory"] = memory
 
     def _calculate_token_limit(self, data: Dict[str, Any]) -> int:
         """Calculate token limit based on plan and data.
@@ -412,6 +443,9 @@ class MultiProviderMonitoringOrchestrator:
             "total_tokens": total_tokens,
             "total_cost": total_cost,
         }
+        merged_memory = self._merge_memory_metrics(self._provider_latest_data)
+        if merged_memory:
+            merged_data["metadata"]["memory"] = merged_memory
 
         return {
             "data": merged_data,
@@ -421,6 +455,7 @@ class MultiProviderMonitoringOrchestrator:
             "session_count": session_count,
             "providers": sorted(self._provider_latest_data.keys()),
             "provider_data": dict(self._provider_latest_data),
+            "memory": merged_memory,
         }
 
     def _attach_provider_to_block(
@@ -459,3 +494,33 @@ class MultiProviderMonitoringOrchestrator:
         except Exception as e:
             logger.exception(f"Error calculating merged token limit: {e}")
             return DEFAULT_TOKEN_LIMIT
+
+    def _merge_memory_metrics(
+        self, provider_data: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Merge provider memory snapshots for combined monitoring output."""
+        memory_items = [
+            snapshot.get("memory")
+            for snapshot in provider_data.values()
+            if isinstance(snapshot.get("memory"), dict)
+        ]
+        if not memory_items:
+            return {}
+
+        merged = {
+            "rss_current_mb": max(float(m.get("rss_current_mb", 0.0)) for m in memory_items),
+            "rss_peak_mb": max(float(m.get("rss_peak_mb", 0.0)) for m in memory_items),
+            "rss_p95_mb": max(float(m.get("rss_p95_mb", 0.0)) for m in memory_items),
+            "rss_current_bytes": max(
+                int(m.get("rss_current_bytes", 0)) for m in memory_items
+            ),
+            "rss_peak_bytes": max(int(m.get("rss_peak_bytes", 0)) for m in memory_items),
+            "rss_p95_bytes": max(int(m.get("rss_p95_bytes", 0)) for m in memory_items),
+            "sample_count": max(int(m.get("sample_count", 0)) for m in memory_items),
+            "provider_memory": {
+                provider: snapshot.get("memory")
+                for provider, snapshot in provider_data.items()
+                if isinstance(snapshot.get("memory"), dict)
+            },
+        }
+        return merged
