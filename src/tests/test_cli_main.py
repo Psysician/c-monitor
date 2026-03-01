@@ -55,6 +55,9 @@ class TestMain:
         mock_args.refresh_rate = 10
         mock_args.provider = "claude"
         mock_args.provider_data_path = None
+        mock_args.memory_budget_mb = 77.0
+        mock_args.max_entries_per_block = 321
+        mock_args.retain_entries_for_inactive_blocks = True
 
         mock_settings = Mock()
         mock_settings.log_file = None
@@ -81,7 +84,7 @@ class TestMain:
                 patch("claude_monitor.terminal.themes.get_themed_console"),
                 patch("claude_monitor.ui.display_controller.DisplayController"),
                 patch(
-                    "claude_monitor.monitoring.orchestrator.MonitoringOrchestrator"
+                    "claude_monitor.cli.main.MonitoringOrchestrator"
                 ) as mock_orchestrator,
                 patch("signal.pause", side_effect=KeyboardInterrupt()),
                 patch("time.sleep", side_effect=KeyboardInterrupt()),
@@ -94,8 +97,86 @@ class TestMain:
 
                 result = main(["--plan", "pro"])
                 assert result == 0
+                mock_orchestrator.assert_called_once_with(
+                    update_interval=10,
+                    data_path="/test/path",
+                    provider="claude",
+                    memory_budget_mb=77.0,
+                    max_entries_per_block=321,
+                    retain_entries_for_inactive_blocks=True,
+                )
         finally:
             # Restore the original function
+            actual_module.discover_provider_data_paths = original_discover
+
+    @patch("claude_monitor.core.settings.Settings.load_with_last_used")
+    def test_successful_main_execution_both_provider(
+        self, mock_load_settings: Mock
+    ) -> None:
+        """Realtime startup should route to multi-provider orchestrator for provider=both."""
+        mock_args = Mock()
+        mock_args.theme = None
+        mock_args.plan = "pro"
+        mock_args.timezone = "UTC"
+        mock_args.refresh_per_second = 1.0
+        mock_args.refresh_rate = 10
+        mock_args.provider = "both"
+        mock_args.provider_data_path = None
+        mock_args.memory_budget_mb = 66.0
+        mock_args.max_entries_per_block = 111
+        mock_args.retain_entries_for_inactive_blocks = False
+
+        mock_settings = Mock()
+        mock_settings.log_file = None
+        mock_settings.log_level = "INFO"
+        mock_settings.timezone = "UTC"
+        mock_settings.to_namespace.return_value = mock_args
+        mock_load_settings.return_value = mock_settings
+
+        import sys
+
+        actual_module = sys.modules["claude_monitor.cli.main"]
+        original_discover = actual_module.discover_provider_data_paths
+
+        def discover_side_effect(provider: str, custom_paths: object = None) -> List[Path]:
+            _ = custom_paths
+            if provider == "claude":
+                return [Path("/test/claude")]
+            if provider == "codex":
+                return [Path("/test/codex")]
+            return []
+
+        actual_module.discover_provider_data_paths = Mock(side_effect=discover_side_effect)
+
+        try:
+            with (
+                patch("claude_monitor.terminal.manager.setup_terminal"),
+                patch("claude_monitor.terminal.themes.get_themed_console"),
+                patch("claude_monitor.ui.display_controller.DisplayController"),
+                patch(
+                    "claude_monitor.cli.main.MultiProviderMonitoringOrchestrator"
+                ) as mock_multi,
+                patch("signal.pause", side_effect=KeyboardInterrupt()),
+                patch("time.sleep", side_effect=KeyboardInterrupt()),
+                patch("sys.exit"),
+            ):
+                mock_multi.return_value.wait_for_initial_data.return_value = True
+                mock_multi.return_value.start.return_value = None
+                mock_multi.return_value.stop.return_value = None
+
+                result = main(["--plan", "pro", "--provider", "both"])
+                assert result == 0
+                mock_multi.assert_called_once_with(
+                    update_interval=10,
+                    provider_configs={
+                        "claude": "/test/claude",
+                        "codex": "/test/codex",
+                    },
+                    memory_budget_mb=66.0,
+                    max_entries_per_block=111,
+                    retain_entries_for_inactive_blocks=False,
+                )
+        finally:
             actual_module.discover_provider_data_paths = original_discover
 
 

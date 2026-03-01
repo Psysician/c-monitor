@@ -192,6 +192,11 @@ def _run_monitoring(args: argparse.Namespace) -> None:
             args=args,
             provider_paths=provider_paths,
         )
+        memory_budget_mb = float(getattr(args, "memory_budget_mb", 80.0))
+        max_entries_per_block = int(getattr(args, "max_entries_per_block", 200))
+        retain_entries_for_inactive_blocks = bool(
+            getattr(args, "retain_entries_for_inactive_blocks", False)
+        )
 
         display_controller = DisplayController()
         display_controller.live_manager._console = console
@@ -228,6 +233,11 @@ def _run_monitoring(args: argparse.Namespace) -> None:
                         provider_name: str(path)
                         for provider_name, path in provider_paths.items()
                     },
+                    memory_budget_mb=memory_budget_mb,
+                    max_entries_per_block=max_entries_per_block,
+                    retain_entries_for_inactive_blocks=(
+                        retain_entries_for_inactive_blocks
+                    ),
                 )
             else:
                 data_path = provider_paths[provider]
@@ -235,6 +245,11 @@ def _run_monitoring(args: argparse.Namespace) -> None:
                     update_interval=update_interval,
                     data_path=str(data_path),
                     provider=provider,
+                    memory_budget_mb=memory_budget_mb,
+                    max_entries_per_block=max_entries_per_block,
+                    retain_entries_for_inactive_blocks=(
+                        retain_entries_for_inactive_blocks
+                    ),
                 )
             orchestrator.set_args(args)
 

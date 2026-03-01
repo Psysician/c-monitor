@@ -192,6 +192,7 @@ uv.lock
 *.swp
 *.swo
 *~
+.benchmarks/
 
 # Log files
 *.log

@@ -26,6 +26,8 @@ class MonitoringOrchestrator:
         data_path: Optional[str] = None,
         provider: str = "claude",
         memory_budget_mb: float = 80.0,
+        max_entries_per_block: int = DataManager.DEFAULT_MAX_ENTRIES_PER_BLOCK,
+        retain_entries_for_inactive_blocks: bool = False,
     ) -> None:
         """Initialize orchestrator with components.
 
@@ -34,12 +36,22 @@ class MonitoringOrchestrator:
             data_path: Optional path to provider data directory
             provider: Provider name (claude or codex)
             memory_budget_mb: Target RSS p95 budget in MB
+            max_entries_per_block: Max entries retained per block in memory
+            retain_entries_for_inactive_blocks: Keep entries for inactive blocks
         """
         self.update_interval: int = update_interval
         self.memory_budget_mb: float = memory_budget_mb
+        self.max_entries_per_block: int = max_entries_per_block
+        self.retain_entries_for_inactive_blocks: bool = (
+            retain_entries_for_inactive_blocks
+        )
 
         self.data_manager: DataManager = DataManager(
-            cache_ttl=5, data_path=data_path, provider=provider
+            cache_ttl=5,
+            data_path=data_path,
+            provider=provider,
+            max_entries_per_block=max_entries_per_block,
+            retain_entries_for_inactive_blocks=retain_entries_for_inactive_blocks,
         )
         self.session_monitor: SessionMonitor = SessionMonitor()
         self.memory_tracker: MemoryMetricsTracker = MemoryMetricsTracker()
@@ -277,14 +289,25 @@ class MultiProviderMonitoringOrchestrator:
         self,
         update_interval: int = 10,
         provider_configs: Optional[Dict[str, Optional[str]]] = None,
+        memory_budget_mb: float = 80.0,
+        max_entries_per_block: int = DataManager.DEFAULT_MAX_ENTRIES_PER_BLOCK,
+        retain_entries_for_inactive_blocks: bool = False,
     ) -> None:
         """Initialize child orchestrators for each configured provider.
 
         Args:
             update_interval: Seconds between updates
             provider_configs: Mapping of provider name to optional data path
+            memory_budget_mb: Target RSS p95 memory budget in MB
+            max_entries_per_block: Max entries retained per block in memory
+            retain_entries_for_inactive_blocks: Keep entries for inactive blocks
         """
         self.update_interval = update_interval
+        self.memory_budget_mb = memory_budget_mb
+        self.max_entries_per_block = max_entries_per_block
+        self.retain_entries_for_inactive_blocks = (
+            retain_entries_for_inactive_blocks
+        )
         self.provider_configs: Dict[str, Optional[str]] = (
             provider_configs if provider_configs is not None else {"claude": None}
         )
@@ -310,6 +333,9 @@ class MultiProviderMonitoringOrchestrator:
                 update_interval=update_interval,
                 data_path=data_path,
                 provider=provider,
+                memory_budget_mb=memory_budget_mb,
+                max_entries_per_block=max_entries_per_block,
+                retain_entries_for_inactive_blocks=retain_entries_for_inactive_blocks,
             )
             provider_orchestrator.register_update_callback(
                 _build_provider_callback(provider)

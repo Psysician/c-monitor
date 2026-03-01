@@ -208,6 +208,9 @@ claude-monitor --help
 | --refresh-rate | int | 10 | Data refresh rate in seconds (1-60) |
 | --refresh-per-second | float | 0.75 | Display refresh rate in Hz (0.1-20.0) |
 | --reset-hour | int | None | Daily reset hour (0-23) |
+| --memory-budget-mb | float | 80.0 | RSS p95 budget target in MB for runtime warning telemetry |
+| --max-entries-per-block | int | 200 | Max entries retained per session block in memory |
+| --retain-entries-for-inactive-blocks | flag | False | Keep entry arrays for inactive blocks (disabled by default for lower memory) |
 | --log-level | string | INFO | Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL |
 | --log-file | path | None | Log file path |
 | --debug | flag | False | Enable debug logging |
@@ -249,6 +252,7 @@ The monitor automatically saves your preferences to avoid re-specifying them on 
 - Refresh rates (--refresh-rate, --refresh-per-second)
 - Reset hour (--reset-hour)
 - Custom token limits (--custom-limit-tokens)
+- Memory budget and retention settings (`--memory-budget-mb`, `--max-entries-per-block`, `--retain-entries-for-inactive-blocks`)
 
 **Configuration Location:** ~/.claude-monitor/last_used.json
 

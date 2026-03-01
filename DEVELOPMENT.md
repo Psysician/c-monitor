@@ -208,6 +208,23 @@ uv run ruff format .
 5. **Quality Checks**: All tools run automatically on commit
 6. **Pull Request**: Submit with clear description and documentation updates
 
+#### **Release Gate Commands (c-monitor fork)**
+```bash
+# Full quality gates
+uv run ruff check src
+uv run pytest -q .
+
+# Provider compatibility smoke (dual-provider realtime/table aggregation paths)
+uv run pytest -q src/tests/test_dual_provider_smoke.py
+
+# Memory gate (rss_p95 <= 80 MB, rss_peak <= 120 MB)
+uv run python scripts/memory_benchmark.py \
+  --samples 30 \
+  --rss-p95-budget-mb 80 \
+  --rss-peak-budget-mb 120 \
+  --output .benchmarks/memory-benchmark-report.json
+```
+
 ### 🎯 **Contribution Priorities**
 
 #### **High Priority (Immediate Impact)**

@@ -54,6 +54,9 @@ class TestLastUsedParams:
                 "refresh_rate": 5,
                 "reset_hour": 12,
                 "custom_limit_tokens": 1000,
+                "memory_budget_mb": 72.5,
+                "max_entries_per_block": 256,
+                "retain_entries_for_inactive_blocks": False,
                 "view": "realtime",
             },
         )()
@@ -75,6 +78,9 @@ class TestLastUsedParams:
         assert data["refresh_rate"] == 5
         assert data["reset_hour"] == 12
         assert data["custom_limit_tokens"] == 1000
+        assert data["memory_budget_mb"] == 72.5
+        assert data["max_entries_per_block"] == 256
+        assert data["retain_entries_for_inactive_blocks"] is False
         assert data["view"] == "realtime"
         assert "timestamp" in data
 
@@ -91,6 +97,9 @@ class TestLastUsedParams:
                 "refresh_rate": 10,
                 "reset_hour": None,
                 "custom_limit_tokens": None,
+                "memory_budget_mb": 80.0,
+                "max_entries_per_block": 200,
+                "retain_entries_for_inactive_blocks": False,
                 "view": "realtime",
             },
         )()
@@ -120,6 +129,9 @@ class TestLastUsedParams:
                 "refresh_rate": 5,
                 "reset_hour": 12,
                 "custom_limit_tokens": None,
+                "memory_budget_mb": 80.0,
+                "max_entries_per_block": 200,
+                "retain_entries_for_inactive_blocks": False,
                 "view": "realtime",
             },
         )()
@@ -142,6 +154,9 @@ class TestLastUsedParams:
             mock_settings.refresh_rate = 5
             mock_settings.reset_hour = 12
             mock_settings.custom_limit_tokens = None
+            mock_settings.memory_budget_mb = 80.0
+            mock_settings.max_entries_per_block = 200
+            mock_settings.retain_entries_for_inactive_blocks = False
             mock_settings.view = "realtime"
 
             # Should not raise exception
@@ -255,6 +270,9 @@ class TestSettings:
         assert settings.refresh_rate == 10
         assert settings.refresh_per_second == 0.75
         assert settings.reset_hour is None
+        assert settings.memory_budget_mb == 80.0
+        assert settings.max_entries_per_block == 200
+        assert settings.retain_entries_for_inactive_blocks is False
         assert settings.log_level == "INFO"
         assert settings.log_file is None
         assert settings.debug is False
@@ -395,6 +413,12 @@ class TestSettings:
 
         with pytest.raises(ValueError):
             Settings(reset_hour=24, _cli_parse_args=[])
+
+        with pytest.raises(ValueError):
+            Settings(memory_budget_mb=0.0, _cli_parse_args=[])
+
+        with pytest.raises(ValueError):
+            Settings(max_entries_per_block=-1, _cli_parse_args=[])
 
     @patch("claude_monitor.core.settings.Settings._get_system_timezone")
     @patch("claude_monitor.core.settings.Settings._get_system_time_format")
@@ -601,6 +625,9 @@ class TestSettings:
             refresh_per_second=1.0,
             reset_hour=8,
             custom_limit_tokens=1000,
+            memory_budget_mb=75.0,
+            max_entries_per_block=350,
+            retain_entries_for_inactive_blocks=True,
             time_format="24h",
             log_level="DEBUG",
             log_file=Path("/tmp/test.log"),
@@ -620,6 +647,9 @@ class TestSettings:
         assert namespace.refresh_per_second == 1.0
         assert namespace.reset_hour == 8
         assert namespace.custom_limit_tokens == 1000
+        assert namespace.memory_budget_mb == 75.0
+        assert namespace.max_entries_per_block == 350
+        assert namespace.retain_entries_for_inactive_blocks is True
         assert namespace.time_format == "24h"
         assert namespace.log_level == "DEBUG"
         assert namespace.log_file == "/tmp/test.log"
@@ -633,6 +663,9 @@ class TestSettings:
         assert namespace.log_file is None
         assert namespace.reset_hour is None
         assert namespace.custom_limit_tokens is None
+        assert namespace.memory_budget_mb == 80.0
+        assert namespace.max_entries_per_block == 200
+        assert namespace.retain_entries_for_inactive_blocks is False
 
 
 class TestSettingsIntegration:

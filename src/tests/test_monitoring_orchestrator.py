@@ -79,7 +79,11 @@ class TestMonitoringOrchestratorInit:
             assert len(orchestrator._update_callbacks) == 0
 
             mock_dm.assert_called_once_with(
-                cache_ttl=5, data_path=None, provider="claude"
+                cache_ttl=5,
+                data_path=None,
+                provider="claude",
+                max_entries_per_block=200,
+                retain_entries_for_inactive_blocks=False,
             )
             mock_sm.assert_called_once()
 
@@ -95,7 +99,11 @@ class TestMonitoringOrchestratorInit:
 
             assert orchestrator.update_interval == 5
             mock_dm.assert_called_once_with(
-                cache_ttl=5, data_path="/custom/path", provider="claude"
+                cache_ttl=5,
+                data_path="/custom/path",
+                provider="claude",
+                max_entries_per_block=200,
+                retain_entries_for_inactive_blocks=False,
             )
 
 
@@ -737,6 +745,25 @@ class TestMultiProviderMonitoringOrchestrator:
         orchestrator.stop()
         claude_orchestrator.stop.assert_called_once()
         codex_orchestrator.stop.assert_called_once()
+
+    def test_init_passes_memory_tuning_to_children(self) -> None:
+        """Constructor should propagate retention and budget knobs to children."""
+        with patch(
+            "claude_monitor.monitoring.orchestrator.MonitoringOrchestrator",
+            side_effect=[Mock(), Mock()],
+        ) as mock_child:
+            MultiProviderMonitoringOrchestrator(
+                provider_configs={"claude": "/tmp/claude", "codex": "/tmp/codex"},
+                memory_budget_mb=64.0,
+                max_entries_per_block=123,
+                retain_entries_for_inactive_blocks=True,
+            )
+
+        assert mock_child.call_count == 2
+        for call in mock_child.call_args_list:
+            assert call.kwargs["memory_budget_mb"] == 64.0
+            assert call.kwargs["max_entries_per_block"] == 123
+            assert call.kwargs["retain_entries_for_inactive_blocks"] is True
 
     def test_handle_provider_update_emits_merged_payload(self) -> None:
         """Provider updates should emit merged blocks annotated with providers."""

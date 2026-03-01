@@ -35,6 +35,9 @@ class LastUsedParams:
                 "refresh_rate": settings.refresh_rate,
                 "reset_hour": settings.reset_hour,
                 "view": settings.view,
+                "memory_budget_mb": settings.memory_budget_mb,
+                "max_entries_per_block": settings.max_entries_per_block,
+                "retain_entries_for_inactive_blocks": settings.retain_entries_for_inactive_blocks,
                 "timestamp": datetime.now().isoformat(),
             }
             provider_data_path = getattr(settings, "provider_data_path", None)
@@ -169,6 +172,25 @@ class Settings(BaseSettings):
 
     reset_hour: Optional[int] = Field(
         default=None, ge=0, le=23, description="Reset hour for daily limits (0-23)"
+    )
+
+    memory_budget_mb: float = Field(
+        default=80.0,
+        ge=1.0,
+        le=1024.0,
+        description="Target RSS p95 memory budget in MB",
+    )
+
+    max_entries_per_block: int = Field(
+        default=200,
+        ge=0,
+        le=10000,
+        description="Max entries retained per session block in memory",
+    )
+
+    retain_entries_for_inactive_blocks: bool = Field(
+        default=False,
+        description="Retain entries arrays for inactive blocks",
     )
 
     log_level: str = Field(default="INFO", description="Logging level")
@@ -376,6 +398,11 @@ class Settings(BaseSettings):
         args.refresh_per_second = self.refresh_per_second
         args.reset_hour = self.reset_hour
         args.custom_limit_tokens = self.custom_limit_tokens
+        args.memory_budget_mb = self.memory_budget_mb
+        args.max_entries_per_block = self.max_entries_per_block
+        args.retain_entries_for_inactive_blocks = (
+            self.retain_entries_for_inactive_blocks
+        )
         args.time_format = self.time_format
         args.log_level = self.log_level
         args.log_file = str(self.log_file) if self.log_file else None
