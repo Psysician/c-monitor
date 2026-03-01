@@ -47,6 +47,25 @@ class PricingCalculator:
         },
     }
 
+    OPENAI_PRICING: Dict[str, Dict[str, float]] = {
+        "gpt-5-nano": {"input": 0.05, "output": 0.40, "cache_read": 0.005},
+        "gpt-5-mini": {"input": 0.25, "output": 2.0, "cache_read": 0.025},
+        "gpt-5.1-codex-mini": {"input": 0.25, "output": 2.0, "cache_read": 0.025},
+        "gpt-5": {"input": 1.25, "output": 10.0, "cache_read": 0.125},
+        "gpt-5-chat": {"input": 1.25, "output": 10.0, "cache_read": 0.125},
+        "gpt-5-codex": {"input": 1.25, "output": 10.0, "cache_read": 0.125},
+        "gpt-5.1": {"input": 1.25, "output": 10.0, "cache_read": 0.125},
+        "gpt-5.1-chat": {"input": 1.25, "output": 10.0, "cache_read": 0.125},
+        "gpt-5.1-codex": {"input": 1.25, "output": 10.0, "cache_read": 0.125},
+        "gpt-5.1-codex-max": {"input": 1.25, "output": 10.0, "cache_read": 0.125},
+        "gpt-5.2": {"input": 1.75, "output": 14.0, "cache_read": 0.175},
+        "gpt-5.2-chat": {"input": 1.75, "output": 14.0, "cache_read": 0.175},
+        "gpt-5.2-codex": {"input": 1.75, "output": 14.0, "cache_read": 0.175},
+        "gpt-5.3-codex": {"input": 1.75, "output": 14.0, "cache_read": 0.175},
+        "gpt-5-pro": {"input": 15.0, "output": 120.0, "cache_read": 15.0},
+        "gpt-5.2-pro": {"input": 21.0, "output": 168.0, "cache_read": 21.0},
+    }
+
     def __init__(
         self, custom_pricing: Optional[Dict[str, Dict[str, float]]] = None
     ) -> None:
@@ -66,6 +85,15 @@ class PricingCalculator:
             "claude-sonnet-4-20250514": self.FALLBACK_PRICING["sonnet"],
             "claude-opus-4-20250514": self.FALLBACK_PRICING["opus"],
         }
+        if custom_pricing is None:
+            for model, rates in self.OPENAI_PRICING.items():
+                self.pricing[model] = {
+                    "input": rates["input"],
+                    "output": rates["output"],
+                    # OpenAI does not charge cache writes.
+                    "cache_creation": 0.0,
+                    "cache_read": rates["cache_read"],
+                }
         self._cost_cache: Dict[str, float] = {}
 
     def calculate_cost(
@@ -169,11 +197,56 @@ class PricingCalculator:
                 pricing["cache_read"] = pricing["input"] * 0.1
             return pricing
 
-        # If strict mode, raise KeyError for unknown models
+        # If strict mode, raise KeyError for unknown models.
         if strict:
             raise KeyError(f"Unknown model: {model}")
 
-        # Fallback to hardcoded pricing based on model type
+        # OpenAI/Codex model fallback.
+        model_lower = model.lower()
+        if model_lower.startswith("gpt-") or "codex" in model_lower:
+            if "nano" in model_lower:
+                return {
+                    "input": 0.05,
+                    "output": 0.40,
+                    "cache_creation": 0.0,
+                    "cache_read": 0.005,
+                }
+            if "mini" in model_lower:
+                return {
+                    "input": 0.25,
+                    "output": 2.0,
+                    "cache_creation": 0.0,
+                    "cache_read": 0.025,
+                }
+            if "pro" in model_lower and "5.2" in model_lower:
+                return {
+                    "input": 21.0,
+                    "output": 168.0,
+                    "cache_creation": 0.0,
+                    "cache_read": 21.0,
+                }
+            if "pro" in model_lower:
+                return {
+                    "input": 15.0,
+                    "output": 120.0,
+                    "cache_creation": 0.0,
+                    "cache_read": 15.0,
+                }
+            if "5.2" in model_lower or "5.3" in model_lower:
+                return {
+                    "input": 1.75,
+                    "output": 14.0,
+                    "cache_creation": 0.0,
+                    "cache_read": 0.175,
+                }
+            return {
+                "input": 1.25,
+                "output": 10.0,
+                "cache_creation": 0.0,
+                "cache_read": 0.125,
+            }
+
+        # Claude fallback based on family.
         model_lower = model.lower()
         if "opus" in model_lower:
             return self.FALLBACK_PRICING["opus"]

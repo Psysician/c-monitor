@@ -1,6 +1,7 @@
 """Simplified tests for CLI main module."""
 
 from pathlib import Path
+from typing import List
 from unittest.mock import Mock, patch
 
 from claude_monitor.cli.main import main
@@ -52,6 +53,8 @@ class TestMain:
         mock_args.timezone = "UTC"
         mock_args.refresh_per_second = 1.0
         mock_args.refresh_rate = 10
+        mock_args.provider = "claude"
+        mock_args.provider_data_path = None
 
         mock_settings = Mock()
         mock_settings.log_file = None
@@ -67,8 +70,8 @@ class TestMain:
         actual_module = sys.modules["claude_monitor.cli.main"]
 
         # Manually replace the function - this works across all Python versions
-        original_discover = actual_module.discover_claude_data_paths
-        actual_module.discover_claude_data_paths = Mock(
+        original_discover = actual_module.discover_provider_data_paths
+        actual_module.discover_provider_data_paths = Mock(
             return_value=[Path("/test/path")]
         )
 
@@ -93,7 +96,7 @@ class TestMain:
                 assert result == 0
         finally:
             # Restore the original function
-            actual_module.discover_claude_data_paths = original_discover
+            actual_module.discover_provider_data_paths = original_discover
 
 
 class TestFunctions:
@@ -107,6 +110,14 @@ class TestFunctions:
         assert isinstance(paths, list)
         assert len(paths) > 0
         assert "~/.claude/projects" in paths
+
+    def test_get_standard_codex_paths(self) -> None:
+        """Test getting standard Codex paths."""
+        from claude_monitor.cli.main import get_standard_codex_paths
+
+        paths = get_standard_codex_paths()
+        assert isinstance(paths, list)
+        assert "~/.codex/sessions" in paths
 
     def test_discover_claude_data_paths_no_paths(self) -> None:
         """Test discover with no existing paths."""
@@ -128,3 +139,144 @@ class TestFunctions:
             paths = discover_claude_data_paths(custom_paths)
             assert len(paths) == 1
             assert paths[0].name == "path"
+
+    def test_resolve_provider_data_paths_single_provider(self) -> None:
+        """Test provider path resolution for a single provider."""
+        from claude_monitor.cli.main import resolve_provider_data_paths
+
+        with patch(
+            "claude_monitor.cli.main.discover_provider_data_paths",
+            return_value=[Path("/tmp/claude")],
+        ) as mock_discover:
+            paths = resolve_provider_data_paths("claude")
+
+        assert paths == {"claude": Path("/tmp/claude")}
+        mock_discover.assert_called_once_with(provider="claude", custom_paths=None)
+
+    def test_resolve_provider_data_paths_both(self) -> None:
+        """Test provider path resolution in multi-provider mode."""
+        from claude_monitor.cli.main import resolve_provider_data_paths
+
+        def discover_side_effect(
+            provider: str, custom_paths: object = None
+        ) -> List[Path]:
+            _ = custom_paths
+            if provider == "claude":
+                return [Path("/tmp/claude")]
+            if provider == "codex":
+                return [Path("/tmp/codex")]
+            return []
+
+        with patch(
+            "claude_monitor.cli.main.discover_provider_data_paths",
+            side_effect=discover_side_effect,
+        ) as mock_discover:
+            paths = resolve_provider_data_paths("both")
+
+        assert paths == {
+            "claude": Path("/tmp/claude"),
+            "codex": Path("/tmp/codex"),
+        }
+        assert mock_discover.call_count == 2
+
+    def test_get_initial_token_limit_for_paths_custom_multi_provider(self) -> None:
+        """Test custom plan startup token limit from merged provider blocks."""
+        from claude_monitor.cli.main import _get_initial_token_limit_for_paths
+
+        args = Mock()
+        args.plan = "custom"
+        args.custom_limit_tokens = None
+
+        provider_paths = {
+            "claude": Path("/tmp/claude"),
+            "codex": Path("/tmp/codex"),
+        }
+
+        with (
+            patch(
+                "claude_monitor.cli.main.analyze_usage",
+                side_effect=[
+                    {"blocks": [{"id": "claude-block"}]},
+                    {"blocks": [{"id": "codex-block"}]},
+                ],
+            ) as mock_analyze,
+            patch(
+                "claude_monitor.cli.main.get_token_limit",
+                return_value=12345,
+            ) as mock_limit,
+        ):
+            token_limit = _get_initial_token_limit_for_paths(args, provider_paths)
+
+        assert token_limit == 12345
+        assert mock_analyze.call_count == 2
+        mock_limit.assert_called_once_with(
+            "custom",
+            [{"id": "claude-block"}, {"id": "codex-block"}],
+        )
+
+    def test_merge_aggregated_period_data_daily(self) -> None:
+        """Test merging daily table rows from multiple providers."""
+        from claude_monitor.cli.main import _merge_aggregated_period_data
+
+        provider_aggregates = {
+            "claude": [
+                {
+                    "date": "2026-03-01",
+                    "input_tokens": 100,
+                    "output_tokens": 40,
+                    "cache_creation_tokens": 10,
+                    "cache_read_tokens": 5,
+                    "total_cost": 0.5,
+                    "models_used": ["claude-3-5-sonnet"],
+                    "model_breakdowns": {
+                        "claude-3-5-sonnet": {
+                            "input_tokens": 100,
+                            "output_tokens": 40,
+                            "cache_creation_tokens": 10,
+                            "cache_read_tokens": 5,
+                            "cost": 0.5,
+                            "count": 2,
+                        }
+                    },
+                    "entries_count": 2,
+                }
+            ],
+            "codex": [
+                {
+                    "date": "2026-03-01",
+                    "input_tokens": 70,
+                    "output_tokens": 30,
+                    "cache_creation_tokens": 0,
+                    "cache_read_tokens": 0,
+                    "total_cost": 0.25,
+                    "models_used": ["gpt-5-codex"],
+                    "model_breakdowns": {
+                        "gpt-5-codex": {
+                            "input_tokens": 70,
+                            "output_tokens": 30,
+                            "cache_creation_tokens": 0,
+                            "cache_read_tokens": 0,
+                            "cost": 0.25,
+                            "count": 1,
+                        }
+                    },
+                    "entries_count": 1,
+                }
+            ],
+        }
+
+        merged = _merge_aggregated_period_data(
+            provider_aggregates=provider_aggregates,
+            view_mode="daily",
+        )
+
+        assert len(merged) == 1
+        day = merged[0]
+        assert day["date"] == "2026-03-01"
+        assert day["input_tokens"] == 170
+        assert day["output_tokens"] == 70
+        assert day["cache_creation_tokens"] == 10
+        assert day["cache_read_tokens"] == 5
+        assert day["entries_count"] == 3
+        assert day["total_cost"] == 0.75
+        assert set(day["models_used"]) == {"claude-3-5-sonnet", "gpt-5-codex"}

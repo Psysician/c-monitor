@@ -246,6 +246,8 @@ class TestSettings:
         settings = Settings(_cli_parse_args=[])
 
         assert settings.plan == "custom"
+        assert settings.provider == "claude"
+        assert settings.provider_data_path is None
         assert settings.timezone == "auto"
         assert settings.time_format == "auto"
         assert settings.theme == "auto"
@@ -300,6 +302,20 @@ class TestSettings:
         """Test theme validator with invalid value."""
         with pytest.raises(ValueError, match="Invalid theme: invalid"):
             Settings(theme="invalid", _cli_parse_args=[])
+
+    def test_provider_validator_valid_values(self) -> None:
+        """Test provider validator with valid values."""
+        settings = Settings(provider="claude", _cli_parse_args=[])
+        assert settings.provider == "claude"
+        settings = Settings(provider="CoDeX", _cli_parse_args=[])
+        assert settings.provider == "codex"
+        settings = Settings(provider="BOTH", _cli_parse_args=[])
+        assert settings.provider == "both"
+
+    def test_provider_validator_invalid_value(self) -> None:
+        """Test provider validator with invalid value."""
+        with pytest.raises(ValueError, match="Invalid provider: invalid"):
+            Settings(provider="invalid", _cli_parse_args=[])
 
     def test_timezone_validator_valid_values(self) -> None:
         """Test timezone validator with valid values."""
@@ -577,6 +593,8 @@ class TestSettings:
         """Test conversion to argparse.Namespace."""
         settings = Settings(
             plan="pro",
+            provider="codex",
+            provider_data_path="~/.codex/sessions",
             timezone="UTC",
             theme="dark",
             refresh_rate=5,
@@ -594,6 +612,8 @@ class TestSettings:
 
         assert isinstance(namespace, argparse.Namespace)
         assert namespace.plan == "pro"
+        assert namespace.provider == "codex"
+        assert namespace.provider_data_path == "~/.codex/sessions"
         assert namespace.timezone == "UTC"
         assert namespace.theme == "dark"
         assert namespace.refresh_rate == 5

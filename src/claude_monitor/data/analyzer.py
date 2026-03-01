@@ -78,15 +78,22 @@ class SessionAnalyzer:
 
         return blocks
 
-    def detect_limits(self, raw_entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def detect_limits(
+        self, raw_entries: List[Dict[str, Any]], provider: str = "claude"
+    ) -> List[Dict[str, Any]]:
         """Detect token limit messages from raw JSONL entries.
 
         Args:
             raw_entries: List of raw JSONL entries
+            provider: Provider name to route provider-specific limit parsing
 
         Returns:
             List of detected limit information
         """
+        provider_name = provider.strip().lower() if provider else "claude"
+        if provider_name != "claude":
+            return []
+
         limits: List[Dict[str, Any]] = []
 
         for raw_data in raw_entries:

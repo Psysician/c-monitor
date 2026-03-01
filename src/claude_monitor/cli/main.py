@@ -23,8 +23,17 @@ from claude_monitor.core.plans import Plans, PlanType, get_token_limit
 from claude_monitor.core.settings import Settings
 from claude_monitor.data.aggregator import UsageAggregator
 from claude_monitor.data.analysis import analyze_usage
+from claude_monitor.data.provider_registry import (
+    discover_provider_data_paths as discover_provider_paths_from_registry,
+)
+from claude_monitor.data.provider_registry import (
+    get_standard_provider_paths,
+)
 from claude_monitor.error_handling import report_error
-from claude_monitor.monitoring.orchestrator import MonitoringOrchestrator
+from claude_monitor.monitoring.orchestrator import (
+    MonitoringOrchestrator,
+    MultiProviderMonitoringOrchestrator,
+)
 from claude_monitor.terminal.manager import (
     enter_alternate_screen,
     handle_cleanup_and_exit,
@@ -43,7 +52,21 @@ SessionChangeCallback = Callable[[str, str, Optional[Dict[str, Any]]], None]
 
 def get_standard_claude_paths() -> List[str]:
     """Get list of standard Claude data directory paths to check."""
-    return ["~/.claude/projects", "~/.config/claude/projects"]
+    return get_standard_provider_paths("claude")
+
+
+def get_standard_codex_paths() -> List[str]:
+    """Get list of standard Codex data directory paths to check."""
+    return get_standard_provider_paths("codex")
+
+
+def discover_provider_data_paths(
+    provider: str, custom_paths: Optional[List[str]] = None
+) -> List[Path]:
+    """Discover all available provider data directories."""
+    return discover_provider_paths_from_registry(
+        provider=provider, custom_paths=custom_paths
+    )
 
 
 def discover_claude_data_paths(custom_paths: Optional[List[str]] = None) -> List[Path]:
@@ -55,18 +78,29 @@ def discover_claude_data_paths(custom_paths: Optional[List[str]] = None) -> List
     Returns:
         List of Path objects for existing Claude data directories
     """
-    paths_to_check: List[str] = (
-        [str(p) for p in custom_paths] if custom_paths else get_standard_claude_paths()
+    return discover_provider_data_paths("claude", custom_paths=custom_paths)
+
+
+def resolve_provider_data_paths(
+    provider: str, provider_data_path: Optional[str] = None
+) -> Dict[str, Path]:
+    """Resolve provider data roots for single-provider or multi-provider mode."""
+    normalized_provider = provider.strip().lower()
+    providers: List[str] = (
+        ["claude", "codex"] if normalized_provider == "both" else [normalized_provider]
     )
+    custom_paths = [provider_data_path] if provider_data_path else None
 
-    discovered_paths: List[Path] = []
+    resolved: Dict[str, Path] = {}
+    for provider_name in providers:
+        discovered = discover_provider_data_paths(
+            provider=provider_name,
+            custom_paths=custom_paths,
+        )
+        if discovered:
+            resolved[provider_name] = discovered[0]
 
-    for path_str in paths_to_check:
-        path = Path(path_str).expanduser().resolve()
-        if path.exists() and path.is_dir():
-            discovered_paths.append(path)
-
-    return discovered_paths
+    return resolved
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -120,21 +154,44 @@ def _run_monitoring(args: argparse.Namespace) -> None:
     live_display_active: bool = False
 
     try:
-        data_paths: List[Path] = discover_claude_data_paths()
-        if not data_paths:
-            print_themed("No Claude data directory found", style="error")
+        provider = getattr(args, "provider", "claude").strip().lower()
+        provider_data_path = getattr(args, "provider_data_path", None)
+        provider_paths = resolve_provider_data_paths(provider, provider_data_path)
+
+        if not provider_paths:
+            print_themed(
+                "No provider data directories found. Use --provider-data-path to override.",
+                style="error",
+            )
             return
 
-        data_path: Path = data_paths[0]
         logger = logging.getLogger(__name__)
-        logger.info(f"Using data path: {data_path}")
+        for provider_name, provider_path in provider_paths.items():
+            logger.info(f"Using {provider_name} data path: {provider_path}")
+
+        if provider == "both":
+            missing_providers = [
+                provider_name
+                for provider_name in ["claude", "codex"]
+                if provider_name not in provider_paths
+            ]
+            if missing_providers:
+                print_themed(
+                    "Missing data directories for: "
+                    + ", ".join(missing_providers)
+                    + ". Monitoring available providers only.",
+                    style="warning",
+                )
 
         # Handle different view modes
         if view_mode in ["daily", "monthly"]:
-            _run_table_view(args, data_path, view_mode, console)
+            _run_table_view(args, provider_paths, view_mode, console)
             return
 
-        token_limit: int = _get_initial_token_limit(args, str(data_path))
+        token_limit: int = _get_initial_token_limit_for_paths(
+            args=args,
+            provider_paths=provider_paths,
+        )
 
         display_controller = DisplayController()
         display_controller.live_manager._console = console
@@ -163,12 +220,22 @@ def _run_monitoring(args: argparse.Namespace) -> None:
             live_display_active = True
             live_display.update(loading_display)
 
-            orchestrator = MonitoringOrchestrator(
-                update_interval=(
-                    args.refresh_rate if hasattr(args, "refresh_rate") else 10
-                ),
-                data_path=str(data_path),
-            )
+            update_interval = args.refresh_rate if hasattr(args, "refresh_rate") else 10
+            if provider == "both":
+                orchestrator = MultiProviderMonitoringOrchestrator(
+                    update_interval=update_interval,
+                    provider_configs={
+                        provider_name: str(path)
+                        for provider_name, path in provider_paths.items()
+                    },
+                )
+            else:
+                data_path = provider_paths[provider]
+                orchestrator = MonitoringOrchestrator(
+                    update_interval=update_interval,
+                    data_path=str(data_path),
+                    provider=provider,
+                )
             orchestrator.set_args(args)
 
             # Setup monitoring callback
@@ -261,7 +328,7 @@ def _run_monitoring(args: argparse.Namespace) -> None:
 
 
 def _get_initial_token_limit(
-    args: argparse.Namespace, data_path: Union[str, Path]
+    args: argparse.Namespace, data_path: Union[str, Path], provider: str = "claude"
 ) -> int:
     """Get initial token limit for the plan."""
     logger = logging.getLogger(__name__)
@@ -288,6 +355,7 @@ def _get_initial_token_limit(
                 quick_start=False,
                 use_cache=False,
                 data_path=str(data_path),
+                provider=provider,
             )
 
             if usage_data and "blocks" in usage_data:
@@ -310,6 +378,58 @@ def _get_initial_token_limit(
 
     # For standard plans, just get the limit
     return get_token_limit(plan)
+
+
+def _get_initial_token_limit_for_paths(
+    args: argparse.Namespace, provider_paths: Dict[str, Path]
+) -> int:
+    """Get startup token limit for one or more provider data paths."""
+    if not provider_paths:
+        return Plans.DEFAULT_TOKEN_LIMIT
+
+    plan: str = getattr(args, "plan", PlanType.PRO.value)
+    if plan != "custom":
+        return get_token_limit(plan)
+
+    if hasattr(args, "custom_limit_tokens") and args.custom_limit_tokens:
+        return int(args.custom_limit_tokens)
+
+    if len(provider_paths) == 1:
+        provider, path = next(iter(provider_paths.items()))
+        return _get_initial_token_limit(args, str(path), provider=provider)
+
+    print_themed(
+        "Analyzing usage data to determine multi-provider cost limits...",
+        style="info",
+    )
+    logger = logging.getLogger(__name__)
+    merged_blocks: List[Dict[str, Any]] = []
+
+    for provider, path in provider_paths.items():
+        try:
+            usage_data = analyze_usage(
+                hours_back=96 * 2,
+                quick_start=False,
+                use_cache=False,
+                data_path=str(path),
+                provider=provider,
+            )
+            blocks = usage_data.get("blocks", []) if usage_data else []
+            if isinstance(blocks, list):
+                merged_blocks.extend(blocks)
+        except Exception as e:
+            logger.warning(f"Failed to analyze usage data for provider {provider}: {e}")
+
+    if merged_blocks:
+        token_limit = get_token_limit(plan, merged_blocks)
+        print_themed(
+            f"Multi-provider P90 session limit calculated: {token_limit:,} tokens",
+            style="info",
+        )
+        return token_limit
+
+    print_themed("Using default limit as fallback", style="warning")
+    return Plans.DEFAULT_TOKEN_LIMIT
 
 
 def handle_application_error(
@@ -379,29 +499,42 @@ def validate_cli_environment() -> Optional[str]:
 
 
 def _run_table_view(
-    args: argparse.Namespace, data_path: Path, view_mode: str, console: Console
+    args: argparse.Namespace,
+    provider_paths: Dict[str, Path],
+    view_mode: str,
+    console: Console,
 ) -> None:
     """Run table view mode (daily/monthly)."""
     logger = logging.getLogger(__name__)
 
     try:
-        # Create aggregator with appropriate mode
-        aggregator = UsageAggregator(
-            data_path=str(data_path),
-            aggregation_mode=view_mode,
-            timezone=args.timezone,
-        )
+        provider_aggregates: Dict[str, List[Dict[str, Any]]] = {}
+        for provider, data_path in provider_paths.items():
+            aggregator = UsageAggregator(
+                data_path=str(data_path),
+                aggregation_mode=view_mode,
+                timezone=args.timezone,
+                provider=provider,
+            )
+            logger.info(f"Loading {view_mode} usage data for provider={provider}...")
+            provider_data = aggregator.aggregate()
+            if provider_data:
+                provider_aggregates[provider] = provider_data
+
+        if not provider_aggregates:
+            print_themed(f"No usage data found for {view_mode} view", style="warning")
+            return
+
+        if len(provider_aggregates) == 1:
+            aggregated_data = next(iter(provider_aggregates.values()))
+        else:
+            aggregated_data = _merge_aggregated_period_data(
+                provider_aggregates=provider_aggregates,
+                view_mode=view_mode,
+            )
 
         # Create table controller
         controller = TableViewsController(console=console)
-
-        # Get aggregated data
-        logger.info(f"Loading {view_mode} usage data...")
-        aggregated_data = aggregator.aggregate()
-
-        if not aggregated_data:
-            print_themed(f"No usage data found for {view_mode} view", style="warning")
-            return
 
         # Display the table
         controller.display_aggregated_view(
@@ -409,7 +542,10 @@ def _run_table_view(
             view_mode=view_mode,
             timezone=args.timezone,
             plan=args.plan,
-            token_limit=_get_initial_token_limit(args, data_path),
+            token_limit=_get_initial_token_limit_for_paths(
+                args=args,
+                provider_paths=provider_paths,
+            ),
         )
 
         # Wait for user to press Ctrl+C
@@ -428,6 +564,92 @@ def _run_table_view(
     except Exception as e:
         logger.error(f"Error in table view: {e}", exc_info=True)
         print_themed(f"Error displaying {view_mode} view: {e}", style="error")
+
+
+def _merge_aggregated_period_data(
+    provider_aggregates: Dict[str, List[Dict[str, Any]]], view_mode: str
+) -> List[Dict[str, Any]]:
+    """Merge per-provider aggregated daily/monthly rows into one timeline."""
+    period_key = "date" if view_mode == "daily" else "month"
+    merged_periods: Dict[str, Dict[str, Any]] = {}
+
+    for provider_data in provider_aggregates.values():
+        for row in provider_data:
+            period_value = row.get(period_key)
+            if not period_value:
+                continue
+            period = str(period_value)
+
+            if period not in merged_periods:
+                merged_periods[period] = {
+                    period_key: period,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cache_creation_tokens": 0,
+                    "cache_read_tokens": 0,
+                    "total_cost": 0.0,
+                    "models_used": set(),
+                    "model_breakdowns": {},
+                    "entries_count": 0,
+                }
+
+            merged_row = merged_periods[period]
+            merged_row["input_tokens"] += int(row.get("input_tokens", 0) or 0)
+            merged_row["output_tokens"] += int(row.get("output_tokens", 0) or 0)
+            merged_row["cache_creation_tokens"] += int(
+                row.get("cache_creation_tokens", 0) or 0
+            )
+            merged_row["cache_read_tokens"] += int(
+                row.get("cache_read_tokens", 0) or 0
+            )
+            merged_row["total_cost"] += float(row.get("total_cost", 0.0) or 0.0)
+            merged_row["entries_count"] += int(row.get("entries_count", 0) or 0)
+
+            models = row.get("models_used", [])
+            if isinstance(models, list):
+                merged_row["models_used"].update(models)
+
+            model_breakdowns = row.get("model_breakdowns", {})
+            if not isinstance(model_breakdowns, dict):
+                continue
+
+            for model, stats in model_breakdowns.items():
+                if not isinstance(stats, dict):
+                    continue
+                merged_stats = merged_row["model_breakdowns"].setdefault(
+                    model,
+                    {
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "cache_creation_tokens": 0,
+                        "cache_read_tokens": 0,
+                        "cost": 0.0,
+                        "count": 0,
+                    },
+                )
+                merged_stats["input_tokens"] += int(stats.get("input_tokens", 0) or 0)
+                merged_stats["output_tokens"] += int(
+                    stats.get("output_tokens", 0) or 0
+                )
+                merged_stats["cache_creation_tokens"] += int(
+                    stats.get("cache_creation_tokens", 0) or 0
+                )
+                merged_stats["cache_read_tokens"] += int(
+                    stats.get("cache_read_tokens", 0) or 0
+                )
+                merged_stats["cost"] += float(stats.get("cost", 0.0) or 0.0)
+                merged_stats["count"] += int(stats.get("count", 0) or 0)
+
+    merged_data: List[Dict[str, Any]] = []
+    for period in sorted(merged_periods.keys()):
+        merged_row = merged_periods[period]
+        models_used = merged_row["models_used"]
+        merged_row["models_used"] = (
+            sorted(models_used) if isinstance(models_used, set) else []
+        )
+        merged_data.append(merged_row)
+
+    return merged_data
 
 
 if __name__ == "__main__":

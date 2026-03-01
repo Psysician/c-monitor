@@ -156,6 +156,16 @@ class TestLoadUsageEntries:
             path_str = str(call_args[0])
             assert ".claude/projects" in path_str
 
+    def test_load_usage_entries_default_codex_path(self) -> None:
+        with patch("claude_monitor.data.reader._find_jsonl_files") as mock_find:
+            mock_find.return_value = []
+
+            load_usage_entries(provider="codex")
+
+            call_args = mock_find.call_args[0]
+            path_str = str(call_args[0])
+            assert ".codex/sessions" in path_str
+
 
 class TestLoadAllRawEntries:
     """Test the load_all_raw_entries function."""
@@ -773,6 +783,53 @@ class TestMapToUsageEntry:
             )
 
         assert result is None
+
+    def test_map_to_usage_entry_codex_normalization(self, mock_components):
+        """Test Codex mapping normalizes cached tokens from input."""
+        timezone_handler, pricing_calculator = mock_components
+
+        data = {
+            "timestamp": "2024-01-01T12:00:00Z",
+            "type": "event_msg",
+            "payload": {
+                "id": "evt_1",
+                "info": {
+                    "model": "gpt-5.1-codex",
+                    "total_token_usage": {
+                        "input_tokens": 120,
+                        "output_tokens": 30,
+                        "cached_input_tokens": 20,
+                    },
+                },
+            },
+        }
+
+        with patch(
+            "claude_monitor.data.reader.TimestampProcessor"
+        ) as mock_ts_processor:
+            mock_ts = Mock()
+            mock_ts.parse_timestamp.return_value = datetime(
+                2024, 1, 1, 12, 0, tzinfo=timezone.utc
+            )
+            mock_ts_processor.return_value = mock_ts
+
+            pricing_calculator.calculate_cost_for_entry.return_value = 0.123
+
+            result = _map_to_usage_entry(
+                data,
+                CostMode.AUTO,
+                timezone_handler,
+                pricing_calculator,
+                provider="codex",
+            )
+
+        assert result is not None
+        assert result.provider == "codex"
+        assert result.model == "gpt-5.1-codex"
+        # input should be normalized to non-cached input
+        assert result.input_tokens == 100
+        assert result.cache_read_tokens == 20
+        assert result.output_tokens == 30
 
     def test_map_to_usage_entry_minimal_data(self, mock_components):
         """Test _map_to_usage_entry with minimal valid data."""
@@ -1650,6 +1707,32 @@ class TestDataProcessors:
         assert result["cache_creation_tokens"] == 20
         assert result["total_tokens"] == 245
 
+    def test_token_extractor_codex_payload_info(self):
+        """Test extraction from Codex payload.info.total_token_usage."""
+        from claude_monitor.core.data_processors import TokenExtractor
+
+        data = {
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "model": "gpt-5.2-codex",
+                    "total_token_usage": {
+                        "input_tokens": 300,
+                        "output_tokens": 100,
+                        "cached_input_tokens": 40,
+                    },
+                },
+            },
+        }
+
+        result = TokenExtractor.extract_tokens(data)
+
+        assert result["input_tokens"] == 300
+        assert result["output_tokens"] == 100
+        assert result["cache_read_tokens"] == 40
+        assert result["total_tokens"] == 440
+
     def test_token_extractor_empty_data(self):
         """Test extraction from empty data."""
         from claude_monitor.core.data_processors import TokenExtractor
@@ -1673,6 +1756,10 @@ class TestDataProcessors:
         # Test message.model field
         data = {"message": {"model": "claude-3-sonnet"}}
         assert DataConverter.extract_model_name(data) == "claude-3-sonnet"
+
+        # Test Codex payload.info.model field
+        data = {"payload": {"info": {"model": "gpt-5.2-codex"}}}
+        assert DataConverter.extract_model_name(data) == "gpt-5.2-codex"
 
         # Test with default
         data = {}

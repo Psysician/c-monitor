@@ -20,6 +20,7 @@ def analyze_usage(
     use_cache: bool = True,
     quick_start: bool = False,
     data_path: Optional[str] = None,
+    provider: str = "claude",
 ) -> Dict[str, Any]:
     """
     Main entry point to generate response_final.json.
@@ -34,7 +35,8 @@ def analyze_usage(
         hours_back: Only analyze data from last N hours (None = all data)
         use_cache: Use cached data when available
         quick_start: Use minimal data for quick startup (last 24h only)
-        data_path: Optional path to Claude data directory
+        data_path: Optional path to provider data directory
+        provider: Provider name (claude or codex)
 
     Returns:
         Dictionary with analyzed blocks
@@ -51,11 +53,14 @@ def analyze_usage(
         logger.info(f"Quick start mode: loading last {hours_back} hours")
 
     start_time = datetime.now()
+    include_raw = provider == "claude"
     entries, raw_entries = load_usage_entries(
         data_path=data_path,
         hours_back=hours_back,
         mode=CostMode.AUTO,
-        include_raw=True,
+        include_raw=include_raw,
+        provider=provider,
+        raw_mode="compact" if include_raw else "full",
     )
     load_time = (datetime.now() - start_time).total_seconds()
     logger.info(f"Data loaded in {load_time:.3f}s")
@@ -71,7 +76,7 @@ def analyze_usage(
 
     limits_detected = 0
     if raw_entries:
-        limit_detections = analyzer.detect_limits(raw_entries)
+        limit_detections = analyzer.detect_limits(raw_entries, provider=provider)
         limits_detected = len(limit_detections)
 
         for block in blocks:
@@ -93,6 +98,7 @@ def analyze_usage(
         "transform_time_seconds": transform_time,
         "cache_used": use_cache,
         "quick_start": quick_start,
+        "provider": provider,
     }
 
     result = _create_result(blocks, entries, metadata)
@@ -216,6 +222,7 @@ def _format_block_entries(entries: List[UsageEntry]) -> List[Dict[str, Any]]:
             "model": entry.model,
             "messageId": entry.message_id,
             "requestId": entry.request_id,
+            "provider": entry.provider,
         }
         for entry in entries
     ]

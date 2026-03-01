@@ -9,7 +9,7 @@ import logging
 from datetime import datetime, timedelta
 from datetime import timezone as tz
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 from claude_monitor.core.data_processors import (
     DataConverter,
@@ -18,6 +18,13 @@ from claude_monitor.core.data_processors import (
 )
 from claude_monitor.core.models import CostMode, UsageEntry
 from claude_monitor.core.pricing import PricingCalculator
+from claude_monitor.data.provider_registry import (
+    ProviderAdapter,
+    discover_provider_data_paths,
+    get_provider_adapter,
+    get_standard_provider_paths,
+    normalize_provider,
+)
 from claude_monitor.error_handling import report_file_error
 from claude_monitor.utils.time_utils import TimezoneHandler
 
@@ -34,19 +41,37 @@ def load_usage_entries(
     hours_back: Optional[int] = None,
     mode: CostMode = CostMode.AUTO,
     include_raw: bool = False,
+    provider: str = "claude",
+    raw_mode: str = "full",
 ) -> Tuple[List[UsageEntry], Optional[List[Dict[str, Any]]]]:
     """Load and convert JSONL files to UsageEntry objects.
 
     Args:
-        data_path: Path to Claude data directory (defaults to ~/.claude/projects)
+        data_path: Path to provider data directory
         hours_back: Only include entries from last N hours
         mode: Cost calculation mode
         include_raw: Whether to return raw JSON data alongside entries
+        provider: Provider name (claude or codex)
+        raw_mode: Raw entry payload mode ("full" or "compact")
 
     Returns:
         Tuple of (usage_entries, raw_data) where raw_data is None unless include_raw=True
     """
-    data_path = Path(data_path if data_path else "~/.claude/projects").expanduser()
+    normalized_provider = normalize_provider(provider)
+    if raw_mode not in {"full", "compact"}:
+        raise ValueError(f"Unsupported raw mode: {raw_mode}")
+    adapter = get_provider_adapter(normalized_provider)
+    if data_path:
+        resolved_path = Path(data_path).expanduser()
+    else:
+        discovered_paths = discover_provider_data_paths(normalized_provider)
+        if discovered_paths:
+            resolved_path = discovered_paths[0]
+        else:
+            # Keep behavior deterministic even if path does not exist yet.
+            resolved_path = Path(
+                get_standard_provider_paths(normalized_provider)[0]
+            ).expanduser()
     timezone_handler = TimezoneHandler()
     pricing_calculator = PricingCalculator()
 
@@ -54,9 +79,9 @@ def load_usage_entries(
     if hours_back:
         cutoff_time = datetime.now(tz.utc) - timedelta(hours=hours_back)
 
-    jsonl_files = _find_jsonl_files(data_path)
+    jsonl_files = _find_jsonl_files(resolved_path)
     if not jsonl_files:
-        logger.warning("No JSONL files found in %s", data_path)
+        logger.warning("No JSONL files found in %s", resolved_path)
         return [], None
 
     all_entries: List[UsageEntry] = []
@@ -72,6 +97,9 @@ def load_usage_entries(
             include_raw,
             timezone_handler,
             pricing_calculator,
+            normalized_provider,
+            adapter,
+            raw_mode,
         )
         all_entries.extend(entries)
         if include_raw and raw_data:
@@ -130,6 +158,9 @@ def _process_single_file(
     include_raw: bool,
     timezone_handler: TimezoneHandler,
     pricing_calculator: PricingCalculator,
+    provider: str = "claude",
+    adapter: Optional[ProviderAdapter] = None,
+    raw_mode: str = "full",
 ) -> Tuple[List[UsageEntry], Optional[List[Dict[str, Any]]]]:
     """Process a single JSONL file."""
     entries: List[UsageEntry] = []
@@ -140,36 +171,27 @@ def _process_single_file(
         entries_filtered = 0
         entries_mapped = 0
 
-        with open(file_path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
+        for data in _iter_file_records(file_path, adapter):
+            entries_read += 1
 
-                try:
-                    data = json.loads(line)
-                    entries_read += 1
+            if not _should_process_entry(data, cutoff_time, processed_hashes, timezone_handler):
+                entries_filtered += 1
+                continue
 
-                    if not _should_process_entry(
-                        data, cutoff_time, processed_hashes, timezone_handler
-                    ):
-                        entries_filtered += 1
-                        continue
+            entry = _map_to_usage_entry(
+                data,
+                mode,
+                timezone_handler,
+                pricing_calculator,
+                provider,
+            )
+            if entry:
+                entries_mapped += 1
+                entries.append(entry)
+                _update_processed_hashes(data, processed_hashes)
 
-                    entry = _map_to_usage_entry(
-                        data, mode, timezone_handler, pricing_calculator
-                    )
-                    if entry:
-                        entries_mapped += 1
-                        entries.append(entry)
-                        _update_processed_hashes(data, processed_hashes)
-
-                    if include_raw:
-                        raw_data.append(data)
-
-                except json.JSONDecodeError as e:
-                    logger.debug(f"Failed to parse JSON line in {file_path}: {e}")
-                    continue
+            if include_raw:
+                raw_data.append(_compact_raw_entry(data) if raw_mode == "compact" else data)
 
         logger.debug(
             f"File {file_path.name}: {entries_read} read, "
@@ -187,6 +209,97 @@ def _process_single_file(
         return [], None
 
     return entries, raw_data
+
+
+def _iter_file_records(
+    file_path: Path, adapter: Optional[ProviderAdapter] = None
+) -> Iterator[Dict[str, Any]]:
+    """Yield normalized records from a file using adapter contract when available."""
+    if adapter:
+        yield from adapter.iter_normalized_records(file_path)
+        return
+
+    with open(file_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError as e:
+                logger.debug(f"Failed to parse JSON line in {file_path}: {e}")
+                continue
+            if isinstance(data, dict):
+                yield data
+
+
+def _compact_raw_entry(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep only fields required for limit detection and context extraction."""
+    compact: Dict[str, Any] = {}
+    passthrough_keys = (
+        "type",
+        "content",
+        "timestamp",
+        "message_id",
+        "messageId",
+        "request_id",
+        "requestId",
+        "session_id",
+        "sessionId",
+        "version",
+        "model",
+    )
+    for key in passthrough_keys:
+        if key in data:
+            compact[key] = data[key]
+
+    message = data.get("message")
+    if isinstance(message, dict):
+        compact["message"] = _compact_message(message)
+
+    return compact
+
+
+def _compact_message(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Compact nested message payload while preserving limit-related signals."""
+    compact: Dict[str, Any] = {}
+    for key in ("id", "model", "usage", "stop_reason"):
+        if key in message:
+            compact[key] = message[key]
+
+    content = message.get("content")
+    if not isinstance(content, list):
+        return compact
+
+    compact_content: List[Dict[str, Any]] = []
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        compact_item: Dict[str, Any] = {}
+        if "type" in item:
+            compact_item["type"] = item["type"]
+        if "text" in item and isinstance(item["text"], str):
+            compact_item["text"] = item["text"]
+        if "content" in item and isinstance(item["content"], list):
+            nested_items: List[Dict[str, Any]] = []
+            for nested in item["content"]:
+                if not isinstance(nested, dict):
+                    continue
+                nested_entry: Dict[str, Any] = {}
+                if "type" in nested:
+                    nested_entry["type"] = nested["type"]
+                if "text" in nested and isinstance(nested["text"], str):
+                    nested_entry["text"] = nested["text"]
+                if nested_entry:
+                    nested_items.append(nested_entry)
+            if nested_items:
+                compact_item["content"] = nested_items
+        if compact_item:
+            compact_content.append(compact_item)
+
+    if compact_content:
+        compact["content"] = compact_content
+    return compact
 
 
 def _should_process_entry(
@@ -210,12 +323,23 @@ def _should_process_entry(
 
 def _create_unique_hash(data: Dict[str, Any]) -> Optional[str]:
     """Create unique hash for deduplication."""
-    message_id = data.get("message_id") or (
-        data.get("message", {}).get("id")
-        if isinstance(data.get("message"), dict)
-        else None
+    message_id = (
+        data.get("message_id")
+        or (
+            data.get("message", {}).get("id")
+            if isinstance(data.get("message"), dict)
+            else None
+        )
+        or data.get("event_id")
+        or data.get("id")
     )
-    request_id = data.get("requestId") or data.get("request_id")
+    payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+    request_id = (
+        data.get("requestId")
+        or data.get("request_id")
+        or payload.get("request_id")
+        or payload.get("id")
+    )
 
     return f"{message_id}:{request_id}" if message_id and request_id else None
 
@@ -232,6 +356,7 @@ def _map_to_usage_entry(
     mode: CostMode,
     timezone_handler: TimezoneHandler,
     pricing_calculator: PricingCalculator,
+    provider: str = "claude",
 ) -> Optional[UsageEntry]:
     """Map raw data to UsageEntry with proper cost calculation."""
     try:
@@ -244,32 +369,52 @@ def _map_to_usage_entry(
         if not any(v for k, v in token_data.items() if k != "total_tokens"):
             return None
 
-        model = DataConverter.extract_model_name(data, default="unknown")
+        default_model = "codex-unknown" if provider == "codex" else "unknown"
+        model = DataConverter.extract_model_name(data, default=default_model)
+        cache_read_tokens = token_data.get("cache_read_tokens", 0)
+        input_tokens = token_data["input_tokens"]
+        # Codex logs can expose input_tokens including cached tokens.
+        if provider == "codex" and cache_read_tokens > 0:
+            input_tokens = max(input_tokens - cache_read_tokens, 0)
 
         entry_data: Dict[str, Any] = {
             FIELD_MODEL: model,
-            TOKEN_INPUT: token_data["input_tokens"],
+            TOKEN_INPUT: input_tokens,
             TOKEN_OUTPUT: token_data["output_tokens"],
             "cache_creation_tokens": token_data.get("cache_creation_tokens", 0),
-            "cache_read_tokens": token_data.get("cache_read_tokens", 0),
+            "cache_read_tokens": cache_read_tokens,
             FIELD_COST_USD: data.get("cost") or data.get(FIELD_COST_USD),
         }
         cost_usd = pricing_calculator.calculate_cost_for_entry(entry_data, mode)
 
         message = data.get("message", {})
-        message_id = data.get("message_id") or message.get("id") or ""
-        request_id = data.get("request_id") or data.get("requestId") or "unknown"
+        payload = data.get("payload", {})
+        message_id = (
+            data.get("message_id")
+            or (message.get("id") if isinstance(message, dict) else None)
+            or data.get("event_id")
+            or data.get("id")
+            or ""
+        )
+        request_id = (
+            data.get("request_id")
+            or data.get("requestId")
+            or (payload.get("request_id") if isinstance(payload, dict) else None)
+            or (payload.get("id") if isinstance(payload, dict) else None)
+            or "unknown"
+        )
 
         return UsageEntry(
             timestamp=timestamp,
-            input_tokens=token_data["input_tokens"],
+            input_tokens=input_tokens,
             output_tokens=token_data["output_tokens"],
             cache_creation_tokens=token_data.get("cache_creation_tokens", 0),
-            cache_read_tokens=token_data.get("cache_read_tokens", 0),
+            cache_read_tokens=cache_read_tokens,
             cost_usd=cost_usd,
             model=model,
             message_id=message_id,
             request_id=request_id,
+            provider=provider,
         )
 
     except (KeyError, ValueError, TypeError, AttributeError) as e:

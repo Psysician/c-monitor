@@ -72,7 +72,9 @@ class TestAnalyzeUsage:
         assert result["total_cost"] == 0.001
         mock_load.assert_called_once()
         mock_analyzer.transform_to_blocks.assert_called_once_with([sample_entry])
-        mock_analyzer.detect_limits.assert_called_once_with([{"raw": "data"}])
+        mock_analyzer.detect_limits.assert_called_once_with(
+            [{"raw": "data"}], provider="claude"
+        )
 
     @patch("claude_monitor.data.analysis.load_usage_entries")
     @patch("claude_monitor.data.analysis.SessionAnalyzer")
@@ -90,7 +92,12 @@ class TestAnalyzeUsage:
 
         result = analyze_usage(quick_start=True, hours_back=None)
         mock_load.assert_called_once_with(
-            data_path=None, hours_back=24, mode=CostMode.AUTO, include_raw=True
+            data_path=None,
+            hours_back=24,
+            mode=CostMode.AUTO,
+            include_raw=True,
+            provider="claude",
+            raw_mode="compact",
         )
 
         assert result["metadata"]["quick_start"] is True
@@ -112,7 +119,12 @@ class TestAnalyzeUsage:
 
         result = analyze_usage(quick_start=True, hours_back=48)
         mock_load.assert_called_once_with(
-            data_path=None, hours_back=48, mode=CostMode.AUTO, include_raw=True
+            data_path=None,
+            hours_back=48,
+            mode=CostMode.AUTO,
+            include_raw=True,
+            provider="claude",
+            raw_mode="compact",
         )
 
         assert result["metadata"]["quick_start"] is True
@@ -198,6 +210,32 @@ class TestAnalyzeUsage:
         result = analyze_usage()
 
         assert result["metadata"]["limits_detected"] == 0
+        mock_analyzer.detect_limits.assert_not_called()
+
+    @patch("claude_monitor.data.analysis.load_usage_entries")
+    @patch("claude_monitor.data.analysis.SessionAnalyzer")
+    @patch("claude_monitor.data.analysis.BurnRateCalculator")
+    def test_analyze_usage_codex_skips_raw_limit_scan(
+        self, mock_calc_class: Mock, mock_analyzer_class: Mock, mock_load: Mock
+    ) -> None:
+        """Codex analysis should not collect raw rows for Claude-only limit parsing."""
+        mock_load.return_value = ([], None)
+        mock_analyzer = Mock()
+        mock_analyzer.transform_to_blocks.return_value = []
+        mock_analyzer_class.return_value = mock_analyzer
+        mock_calc_class.return_value = Mock()
+
+        result = analyze_usage(provider="codex")
+
+        mock_load.assert_called_once_with(
+            data_path=None,
+            hours_back=96,
+            mode=CostMode.AUTO,
+            include_raw=False,
+            provider="codex",
+            raw_mode="full",
+        )
+        assert result["metadata"]["provider"] == "codex"
         mock_analyzer.detect_limits.assert_not_called()
 
 
@@ -447,6 +485,7 @@ class TestBlockConversion:
             "model": "claude-3-haiku",
             "messageId": "msg_1",
             "requestId": "req_1",
+            "provider": "claude",
         }
 
     def test_create_base_block_dict(self) -> None:

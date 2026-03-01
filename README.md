@@ -1,4 +1,4 @@
-# 🎯 Claude Code Usage Monitor
+# 🎯 c-monitor
 [![PyPI Version](https://img.shields.io/pypi/v/claude-monitor.svg)](https://pypi.org/project/claude-monitor/)
 [![Python Version](https://img.shields.io/badge/python-3.9+-blue.svg)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -6,6 +6,17 @@
 [![codecov](https://codecov.io/gh/Maciek-roboblog/Claude-Code-Usage-Monitor/branch/main/graph/badge.svg)](https://codecov.io/gh/Maciek-roboblog/Claude-Code-Usage-Monitor)
 
 A beautiful real-time terminal monitoring tool for Claude AI token usage with advanced analytics, machine learning-based predictions, and Rich UI. Track your token consumption, burn rate, cost analysis, and get intelligent predictions about session limits.
+
+## Fork Goal
+
+`c-monitor` is a fork workspace focused on:
+
+- first-class OpenAI/Codex support next to Claude usage tracking
+- lower memory footprint (targeting a practical RSS budget under heavy sessions)
+- keeping compatibility with existing `claude-monitor` style workflows during migration
+
+Current fork bootstrap notes are in [doc/c-monitor-bootstrap.md](doc/c-monitor-bootstrap.md).
+Execution plan is in [doc/c-monitor-plan.md](doc/c-monitor-plan.md).
 
 ![Claude Token Monitor Screenshot](https://raw.githubusercontent.com/Maciek-roboblog/Claude-Code-Usage-Monitor/main/doc/scnew.png)
 
@@ -189,6 +200,8 @@ claude-monitor --help
 | --plan | string | custom | Plan type: pro, max5, max20, or custom |
 | --custom-limit-tokens | int | None | Token limit for custom plan (must be > 0) |
 | --view | string | realtime | View type: realtime, daily, or monthly |
+| --provider | string | claude | Data provider: claude or codex |
+| --provider-data-path | path | None | Override provider data directory |
 | --timezone | string | auto | Timezone (auto-detected). Examples: UTC, America/New_York, Europe/London |
 | --time-format | string | auto | Time format: 12h, 24h, or auto |
 | --theme | string | auto | Display theme: light, dark, classic, or auto |
@@ -215,9 +228,14 @@ claude-monitor --help
 The tool can be invoked using any of these commands:
 - claude-monitor (primary)
 - claude-code-monitor (full name)
+- c-monitor (fork alias)
 - cmonitor (short)
 - ccmonitor (short alternative)
 - ccm (shortest)
+
+Provider compatibility note:
+- `--provider` defaults to `claude` for backward-compatible startup behavior.
+- Existing command aliases keep the same entrypoint and can be used with either `--provider claude` or `--provider codex`.
 
 #### Save Flags Feature
 

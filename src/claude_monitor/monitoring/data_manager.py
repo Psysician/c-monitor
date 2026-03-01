@@ -18,6 +18,7 @@ class DataManager:
         cache_ttl: int = 30,
         hours_back: int = 192,
         data_path: Optional[str] = None,
+        provider: str = "claude",
     ) -> None:
         """Initialize data manager with cache and fetch settings.
 
@@ -25,6 +26,7 @@ class DataManager:
             cache_ttl: Cache time-to-live in seconds
             hours_back: Hours of historical data to fetch
             data_path: Path to data directory
+            provider: Provider name (claude or codex)
         """
         self.cache_ttl: int = cache_ttl
         self._cache: Optional[Dict[str, Any]] = None
@@ -32,6 +34,7 @@ class DataManager:
 
         self.hours_back: int = hours_back
         self.data_path: Optional[str] = data_path
+        self.provider: str = provider
         self._last_error: Optional[str] = None
         self._last_successful_fetch: Optional[float] = None
 
@@ -60,6 +63,7 @@ class DataManager:
                     quick_start=False,
                     use_cache=False,
                     data_path=self.data_path,
+                    provider=self.provider,
                 )
 
                 if data is not None:

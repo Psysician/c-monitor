@@ -59,6 +59,8 @@ class DisplayController:
             "entries": active_block.get("entries", []),
             "start_time_str": active_block.get("startTime"),
             "end_time_str": active_block.get("endTime"),
+            "active_sessions_count": active_block.get("activeSessionsCount", 1),
+            "active_providers": active_block.get("activeProviders", []),
         }
 
     def _calculate_token_limits(self, args: Any, token_limit: int) -> Tuple[int, int]:
@@ -214,21 +216,22 @@ class DisplayController:
             )
             return self.buffer_manager.create_screen_renderable(screen_buffer)
 
-        # Find the active block
-        active_block = None
-        for block in data["blocks"]:
-            if isinstance(block, dict) and block.get("isActive", False):
-                active_block = block
-                break
+        active_blocks = self._get_active_blocks(data["blocks"])
 
         # Use UTC timezone for time calculations
         current_time = datetime.now(pytz.UTC)
 
-        if not active_block:
+        if not active_blocks:
             screen_buffer = self.session_display.format_no_active_session_screen(
                 args.plan, args.timezone, token_limit, current_time, args
             )
             return self.buffer_manager.create_screen_renderable(screen_buffer)
+
+        active_block = (
+            self._merge_active_blocks(active_blocks)
+            if len(active_blocks) > 1
+            else active_blocks[0]
+        )
 
         cost_limit_p90 = None
         messages_limit_p90 = None
@@ -300,6 +303,111 @@ class DisplayController:
             return self.buffer_manager.create_screen_renderable(screen_buffer)
 
         return self.buffer_manager.create_screen_renderable(screen_buffer)
+
+    def _get_active_blocks(self, blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Return all active session blocks from a block list."""
+        return [
+            block
+            for block in blocks
+            if isinstance(block, dict) and block.get("isActive", False)
+        ]
+
+    def _merge_active_blocks(self, active_blocks: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Merge multiple active blocks into one synthetic active block for display."""
+        merged_tokens = 0
+        merged_cost = 0.0
+        merged_messages = 0
+        merged_entries: List[Dict[str, Any]] = []
+        merged_model_stats: Dict[str, Dict[str, Any]] = {}
+        start_times: List[str] = []
+        end_times: List[str] = []
+        providers: set[str] = set()
+
+        for block in active_blocks:
+            merged_tokens += int(block.get("totalTokens", 0) or 0)
+            merged_cost += float(block.get("costUSD", 0.0) or 0.0)
+            merged_messages += int(block.get("sentMessagesCount", 0) or 0)
+
+            entries = block.get("entries", [])
+            if isinstance(entries, list):
+                merged_entries.extend(
+                    [entry for entry in entries if isinstance(entry, dict)]
+                )
+
+            model_stats = block.get("perModelStats", {})
+            if isinstance(model_stats, dict):
+                self._merge_model_stats(merged_model_stats, model_stats)
+
+            start_time = block.get("startTime")
+            if isinstance(start_time, str):
+                start_times.append(start_time)
+
+            end_time = block.get("endTime")
+            if isinstance(end_time, str):
+                end_times.append(end_time)
+
+            provider = block.get("provider")
+            if isinstance(provider, str) and provider:
+                providers.add(provider)
+
+        merged_entries.sort(key=lambda entry: entry.get("timestamp", ""))
+
+        return {
+            "isActive": True,
+            "totalTokens": merged_tokens,
+            "costUSD": merged_cost,
+            "sentMessagesCount": merged_messages,
+            "perModelStats": merged_model_stats,
+            "entries": merged_entries,
+            "startTime": min(start_times) if start_times else None,
+            "endTime": max(end_times) if end_times else None,
+            "activeSessionsCount": len(active_blocks),
+            "activeProviders": sorted(providers),
+        }
+
+    def _merge_model_stats(
+        self, merged_model_stats: Dict[str, Dict[str, Any]], model_stats: Dict[str, Any]
+    ) -> None:
+        """Merge model-level token stats from one block into cumulative stats."""
+        for model, stats in model_stats.items():
+            if not isinstance(stats, dict):
+                continue
+
+            merged_stats = merged_model_stats.setdefault(
+                model,
+                {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cache_creation_tokens": 0,
+                    "cache_read_tokens": 0,
+                    "cost_usd": 0.0,
+                    "entries_count": 0,
+                },
+            )
+
+            merged_stats["input_tokens"] += int(
+                stats.get("input_tokens", stats.get("inputTokens", 0)) or 0
+            )
+            merged_stats["output_tokens"] += int(
+                stats.get("output_tokens", stats.get("outputTokens", 0)) or 0
+            )
+            merged_stats["cache_creation_tokens"] += int(
+                stats.get(
+                    "cache_creation_tokens",
+                    stats.get("cacheCreationTokens", 0),
+                )
+                or 0
+            )
+            merged_stats["cache_read_tokens"] += int(
+                stats.get("cache_read_tokens", stats.get("cacheReadTokens", 0)) or 0
+            )
+            merged_stats["cost_usd"] += float(
+                stats.get("cost_usd", stats.get("costUSD", stats.get("cost", 0.0)))
+                or 0.0
+            )
+            merged_stats["entries_count"] += int(
+                stats.get("entries_count", stats.get("count", 0)) or 0
+            )
 
     def _process_active_session_data(
         self,
@@ -390,6 +498,8 @@ class DisplayController:
             "show_exceed_notification": notifications["show_exceed_notification"],
             "show_tokens_will_run_out": notifications["show_cost_will_exceed"],
             "original_limit": original_limit,
+            "active_sessions_count": session_data["active_sessions_count"],
+            "active_providers": session_data["active_providers"],
         }
 
     def _calculate_model_distribution(

@@ -93,7 +93,11 @@ class UsageAggregator:
     """Aggregates usage data for daily and monthly reports."""
 
     def __init__(
-        self, data_path: str, aggregation_mode: str = "daily", timezone: str = "UTC"
+        self,
+        data_path: str,
+        aggregation_mode: str = "daily",
+        timezone: str = "UTC",
+        provider: str = "claude",
     ):
         """Initialize the aggregator.
 
@@ -101,10 +105,12 @@ class UsageAggregator:
             data_path: Path to the data directory
             aggregation_mode: Mode of aggregation ('daily' or 'monthly')
             timezone: Timezone string for date formatting
+            provider: Provider name for loading usage entries
         """
         self.data_path = data_path
         self.aggregation_mode = aggregation_mode
         self.timezone = timezone
+        self.provider = provider
         self.timezone_handler = TimezoneHandler()
 
     def _aggregate_by_period(
@@ -277,7 +283,10 @@ class UsageAggregator:
         logger.info(f"Starting aggregation in {self.aggregation_mode} mode")
 
         # Load usage entries
-        entries, _ = load_usage_entries(data_path=self.data_path)
+        entries, _ = load_usage_entries(
+            data_path=self.data_path,
+            provider=self.provider,
+        )
 
         if not entries:
             logger.warning("No usage entries found")

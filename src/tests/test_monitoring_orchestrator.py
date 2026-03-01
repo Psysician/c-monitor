@@ -8,7 +8,10 @@ from unittest.mock import Mock, patch
 import pytest
 
 from claude_monitor.core.plans import DEFAULT_TOKEN_LIMIT
-from claude_monitor.monitoring.orchestrator import MonitoringOrchestrator
+from claude_monitor.monitoring.orchestrator import (
+    MonitoringOrchestrator,
+    MultiProviderMonitoringOrchestrator,
+)
 
 
 @pytest.fixture
@@ -75,7 +78,9 @@ class TestMonitoringOrchestratorInit:
             assert orchestrator._last_valid_data is None
             assert len(orchestrator._update_callbacks) == 0
 
-            mock_dm.assert_called_once_with(cache_ttl=5, data_path=None)
+            mock_dm.assert_called_once_with(
+                cache_ttl=5, data_path=None, provider="claude"
+            )
             mock_sm.assert_called_once()
 
     def test_init_with_custom_params(self) -> None:
@@ -89,7 +94,9 @@ class TestMonitoringOrchestratorInit:
             )
 
             assert orchestrator.update_interval == 5
-            mock_dm.assert_called_once_with(cache_ttl=5, data_path="/custom/path")
+            mock_dm.assert_called_once_with(
+                cache_ttl=5, data_path="/custom/path", provider="claude"
+            )
 
 
 class TestMonitoringOrchestratorLifecycle:
@@ -699,6 +706,95 @@ class TestMonitoringOrchestratorIntegration:
                 result2 = orchestrator._fetch_and_process_data()
             assert result2 is not None
             assert result2["data"]["blocks"][0]["id"] == "test"
+
+
+class TestMultiProviderMonitoringOrchestrator:
+    """Tests for merged multi-provider monitoring flow."""
+
+    def test_start_and_stop_delegate_to_children(self) -> None:
+        """Start and stop should invoke child orchestrators."""
+        claude_orchestrator = Mock()
+        codex_orchestrator = Mock()
+
+        with patch(
+            "claude_monitor.monitoring.orchestrator.MonitoringOrchestrator",
+            side_effect=[claude_orchestrator, codex_orchestrator],
+        ):
+            orchestrator = MultiProviderMonitoringOrchestrator(
+                provider_configs={"claude": "/tmp/claude", "codex": "/tmp/codex"}
+            )
+
+        orchestrator.start()
+        claude_orchestrator.start.assert_called_once()
+        codex_orchestrator.start.assert_called_once()
+
+        orchestrator.stop()
+        claude_orchestrator.stop.assert_called_once()
+        codex_orchestrator.stop.assert_called_once()
+
+    def test_handle_provider_update_emits_merged_payload(self) -> None:
+        """Provider updates should emit merged blocks annotated with providers."""
+        with patch(
+            "claude_monitor.monitoring.orchestrator.MonitoringOrchestrator",
+            side_effect=[Mock(), Mock()],
+        ):
+            orchestrator = MultiProviderMonitoringOrchestrator(
+                provider_configs={"claude": "/tmp/claude", "codex": "/tmp/codex"}
+            )
+
+        args = Mock()
+        args.plan = "pro"
+        orchestrator.set_args(args)
+
+        callback = Mock()
+        orchestrator.register_update_callback(callback)
+
+        with patch(
+            "claude_monitor.monitoring.orchestrator.get_token_limit",
+            return_value=19000,
+        ):
+            orchestrator._handle_provider_update(
+                "claude",
+                {
+                    "data": {
+                        "blocks": [{"id": "c1", "entries": [{}]}],
+                        "entries_count": 1,
+                        "total_tokens": 100,
+                        "total_cost": 1.25,
+                        "metadata": {"provider": "claude"},
+                    },
+                    "session_id": "session-claude",
+                    "session_count": 1,
+                },
+            )
+            orchestrator._handle_provider_update(
+                "codex",
+                {
+                    "data": {
+                        "blocks": [{"id": "x1", "entries": [{}]}],
+                        "entries_count": 2,
+                        "total_tokens": 250,
+                        "total_cost": 2.5,
+                        "metadata": {"provider": "codex"},
+                    },
+                    "session_id": "session-codex",
+                    "session_count": 1,
+                },
+            )
+
+        assert callback.call_count == 2
+        merged_payload = callback.call_args[0][0]
+
+        assert merged_payload["providers"] == ["claude", "codex"]
+        assert merged_payload["data"]["metadata"]["provider"] == "both"
+        assert merged_payload["data"]["entries_count"] == 3
+        assert merged_payload["data"]["total_tokens"] == 350
+
+        merged_blocks = merged_payload["data"]["blocks"]
+        assert len(merged_blocks) == 2
+        assert {block["provider"] for block in merged_blocks} == {"claude", "codex"}
+        for block in merged_blocks:
+            assert block["entries"][0]["provider"] == block["provider"]
 
 
 class TestMonitoringOrchestratorThreadSafety:

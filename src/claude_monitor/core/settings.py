@@ -28,6 +28,7 @@ class LastUsedParams:
         """Save current settings as last used."""
         try:
             params = {
+                "provider": getattr(settings, "provider", "claude"),
                 "theme": settings.theme,
                 "timezone": settings.timezone,
                 "time_format": settings.time_format,
@@ -36,6 +37,9 @@ class LastUsedParams:
                 "view": settings.view,
                 "timestamp": datetime.now().isoformat(),
             }
+            provider_data_path = getattr(settings, "provider_data_path", None)
+            if provider_data_path:
+                params["provider_data_path"] = str(provider_data_path)
 
             if settings.custom_limit_tokens:
                 params["custom_limit_tokens"] = settings.custom_limit_tokens
@@ -107,6 +111,16 @@ class Settings(BaseSettings):
     view: Literal["realtime", "daily", "monthly", "session"] = Field(
         default="realtime",
         description="View mode (realtime, daily, monthly, session)",
+    )
+
+    provider: Literal["claude", "codex", "both"] = Field(
+        default="claude",
+        description="Data provider (claude, codex, both)",
+    )
+
+    provider_data_path: Optional[str] = Field(
+        default=None,
+        description="Override provider data directory path",
     )
 
     @staticmethod
@@ -195,6 +209,20 @@ class Settings(BaseSettings):
                 return v_lower
             raise ValueError(
                 f"Invalid view: {v}. Must be one of: {', '.join(valid_views)}"
+            )
+        return v
+
+    @field_validator("provider", mode="before")
+    @classmethod
+    def validate_provider(cls, v: Any) -> str:
+        """Validate and normalize provider value."""
+        if isinstance(v, str):
+            v_lower = v.lower()
+            valid_providers = ["claude", "codex", "both"]
+            if v_lower in valid_providers:
+                return v_lower
+            raise ValueError(
+                f"Invalid provider: {v}. Must be one of: {', '.join(valid_providers)}"
             )
         return v
 
@@ -340,6 +368,8 @@ class Settings(BaseSettings):
 
         args.plan = self.plan
         args.view = self.view
+        args.provider = self.provider
+        args.provider_data_path = self.provider_data_path
         args.timezone = self.timezone
         args.theme = self.theme
         args.refresh_rate = self.refresh_rate

@@ -370,6 +370,24 @@ class TestPricingCalculator:
         expected_total = cost_without_cache + cache_cost
         assert abs(cost_with_cache - expected_total) < 1e-6
 
+    def test_calculate_cost_codex_model(self, calculator: PricingCalculator) -> None:
+        """Test OpenAI Codex model pricing path."""
+        cost = calculator.calculate_cost(
+            model="gpt-5.1-codex", input_tokens=1000, output_tokens=500
+        )
+        expected = (1000 * 1.25 + 500 * 10.0) / 1000000
+        assert abs(cost - expected) < 1e-6
+
+    def test_calculate_cost_codex_unknown_variant_fallback(
+        self, calculator: PricingCalculator
+    ) -> None:
+        """Test unknown GPT/Codex variants use deterministic fallback."""
+        cost = calculator.calculate_cost(
+            model="gpt-5.9-codex-experimental", input_tokens=1000, output_tokens=500
+        )
+        expected = (1000 * 1.25 + 500 * 10.0) / 1000000
+        assert abs(cost - expected) < 1e-6
+
     def test_model_name_normalization_integration(
         self, calculator: PricingCalculator
     ) -> None:

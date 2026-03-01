@@ -185,6 +185,18 @@ class SessionDisplayComponent:
         header_manager = HeaderManager()
         screen_buffer.extend(header_manager.create_header(plan, timezone))
 
+        active_sessions_count = int(kwargs.get("active_sessions_count", 1) or 1)
+        active_providers = kwargs.get("active_providers", [])
+        if active_sessions_count > 1:
+            providers_text = ", ".join(active_providers) or "multiple providers"
+            screen_buffer.append("")
+            screen_buffer.append(
+                f"🧩 [value]Active Sessions:[/]      [info]{active_sessions_count} combined[/]"
+            )
+            screen_buffer.append(
+                f"🛰️  [value]Providers:[/]            [info]{providers_text}[/]"
+            )
+
         if plan in ["custom", "pro", "max5", "max20"]:
             from claude_monitor.core.plans import DEFAULT_COST_LIMIT
 

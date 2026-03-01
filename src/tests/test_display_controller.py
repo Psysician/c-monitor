@@ -340,6 +340,119 @@ class TestDisplayController:
         assert result is not None
         # Should return no active session screen
 
+    def test_merge_active_blocks_combines_metrics(self, controller) -> None:
+        """Test merging multiple active blocks into one synthetic session."""
+        active_blocks = [
+            {
+                "isActive": True,
+                "totalTokens": 100,
+                "costUSD": 1.25,
+                "sentMessagesCount": 2,
+                "perModelStats": {
+                    "claude-3-5-sonnet": {"input_tokens": 60, "output_tokens": 40}
+                },
+                "entries": [{"timestamp": "2026-03-01T10:00:00Z"}],
+                "startTime": "2026-03-01T10:00:00Z",
+                "endTime": "2026-03-01T11:00:00Z",
+                "provider": "claude",
+            },
+            {
+                "isActive": True,
+                "totalTokens": 50,
+                "costUSD": 0.75,
+                "sentMessagesCount": 1,
+                "perModelStats": {
+                    "gpt-5-codex": {"inputTokens": 30, "outputTokens": 20}
+                },
+                "entries": [{"timestamp": "2026-03-01T10:30:00Z"}],
+                "startTime": "2026-03-01T10:30:00Z",
+                "endTime": "2026-03-01T11:30:00Z",
+                "provider": "codex",
+            },
+        ]
+
+        merged = controller._merge_active_blocks(active_blocks)
+
+        assert merged["totalTokens"] == 150
+        assert merged["costUSD"] == 2.0
+        assert merged["sentMessagesCount"] == 3
+        assert merged["activeSessionsCount"] == 2
+        assert merged["activeProviders"] == ["claude", "codex"]
+        assert merged["startTime"] == "2026-03-01T10:00:00Z"
+        assert merged["endTime"] == "2026-03-01T11:30:00Z"
+        assert len(merged["entries"]) == 2
+        assert merged["perModelStats"]["claude-3-5-sonnet"]["input_tokens"] == 60
+        assert merged["perModelStats"]["gpt-5-codex"]["output_tokens"] == 20
+
+    def test_create_data_display_merges_multiple_active_blocks(
+        self, controller, sample_args
+    ) -> None:
+        """Test create_data_display merges all active blocks before processing."""
+        data = {
+            "blocks": [
+                {
+                    "isActive": True,
+                    "totalTokens": 100,
+                    "costUSD": 1.0,
+                    "sentMessagesCount": 1,
+                    "perModelStats": {},
+                    "entries": [],
+                    "startTime": "2026-03-01T10:00:00Z",
+                    "endTime": "2026-03-01T11:00:00Z",
+                    "provider": "claude",
+                },
+                {
+                    "isActive": True,
+                    "totalTokens": 75,
+                    "costUSD": 0.5,
+                    "sentMessagesCount": 2,
+                    "perModelStats": {},
+                    "entries": [],
+                    "startTime": "2026-03-01T10:15:00Z",
+                    "endTime": "2026-03-01T11:15:00Z",
+                    "provider": "codex",
+                },
+            ]
+        }
+
+        with patch.object(controller, "_process_active_session_data") as mock_process:
+            mock_process.return_value = {
+                "plan": "pro",
+                "timezone": "UTC",
+                "tokens_used": 175,
+                "token_limit": 200000,
+                "usage_percentage": 0.1,
+                "tokens_left": 199825,
+                "elapsed_session_minutes": 10,
+                "total_session_minutes": 300,
+                "burn_rate": 5.0,
+                "session_cost": 1.5,
+                "per_model_stats": {},
+                "model_distribution": {},
+                "sent_messages": 3,
+                "entries": [],
+                "predicted_end_str": "12:00",
+                "reset_time_str": "15:00",
+                "current_time_str": "10:30",
+                "show_switch_notification": False,
+                "show_exceed_notification": False,
+                "show_tokens_will_run_out": False,
+                "original_limit": 200000,
+                "active_sessions_count": 2,
+                "active_providers": ["claude", "codex"],
+            }
+
+            with patch.object(
+                controller.session_display, "format_active_session_screen"
+            ) as mock_format:
+                mock_format.return_value = ["screen"]
+                controller.create_data_display(data, sample_args, 200000)
+
+        merged_block = mock_process.call_args[0][0]
+        assert merged_block["totalTokens"] == 175
+        assert merged_block["costUSD"] == 1.5
+        assert merged_block["activeSessionsCount"] == 2
+
     @patch("claude_monitor.ui.display_controller.Plans.is_valid_plan")
     @patch("claude_monitor.core.plans.get_cost_limit")
     @patch("claude_monitor.ui.display_controller.Plans.get_message_limit")

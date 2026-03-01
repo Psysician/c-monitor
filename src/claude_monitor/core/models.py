@@ -18,7 +18,7 @@ class CostMode(Enum):
 
 @dataclass
 class UsageEntry:
-    """Individual usage record from Claude usage data."""
+    """Individual usage record from provider usage data."""
 
     timestamp: datetime
     input_tokens: int
@@ -29,6 +29,7 @@ class UsageEntry:
     model: str = ""
     message_id: str = ""
     request_id: str = ""
+    provider: str = "claude"
 
 
 @dataclass
@@ -131,6 +132,10 @@ def normalize_model_name(model: str) -> str:
         return ""
 
     model_lower = model.lower()
+
+    # Preserve OpenAI/Codex naming after simple normalization.
+    if model_lower.startswith("gpt-") or "codex" in model_lower:
+        return model_lower
 
     if (
         "claude-opus-4-" in model_lower

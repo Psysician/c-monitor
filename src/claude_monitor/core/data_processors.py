@@ -100,6 +100,16 @@ class TokenExtractor:
                 token_sources.append(data["message"]["usage"])
             if "usage" in data:
                 token_sources.append(data["usage"])
+            if (
+                isinstance(data.get("payload"), dict)
+                and isinstance(data["payload"].get("info"), dict)
+            ):
+                token_sources.append(data["payload"]["info"])
+            if (
+                isinstance(data.get("payload"), dict)
+                and isinstance(data["payload"].get("total_token_usage"), dict)
+            ):
+                token_sources.append(data["payload"]["total_token_usage"])
             token_sources.append(data)
         else:
             if "usage" in data:
@@ -110,6 +120,16 @@ class TokenExtractor:
                 and "usage" in data["message"]
             ):
                 token_sources.append(data["message"]["usage"])
+            if (
+                isinstance(data.get("payload"), dict)
+                and isinstance(data["payload"].get("info"), dict)
+            ):
+                token_sources.append(data["payload"]["info"])
+            if (
+                isinstance(data.get("payload"), dict)
+                and isinstance(data["payload"].get("total_token_usage"), dict)
+            ):
+                token_sources.append(data["payload"]["total_token_usage"])
             token_sources.append(data)
 
         logger.debug(f"TokenExtractor: Checking {len(token_sources)} token sources")
@@ -118,10 +138,15 @@ class TokenExtractor:
             if not isinstance(source, dict):
                 continue
 
+            total_usage = source.get("total_token_usage")
+            if isinstance(total_usage, dict):
+                source = {**source, **total_usage}
+
             input_tokens = (
                 source.get("input_tokens", 0)
                 or source.get("inputTokens", 0)
                 or source.get("prompt_tokens", 0)
+                or source.get("promptTokens", 0)
                 or 0
             )
 
@@ -129,6 +154,7 @@ class TokenExtractor:
                 source.get("output_tokens", 0)
                 or source.get("outputTokens", 0)
                 or source.get("completion_tokens", 0)
+                or source.get("completionTokens", 0)
                 or 0
             )
 
@@ -140,7 +166,8 @@ class TokenExtractor:
             )
 
             cache_read = (
-                source.get("cache_read_input_tokens", 0)
+                source.get("cached_input_tokens", 0)
+                or source.get("cache_read_input_tokens", 0)
                 or source.get("cache_read_tokens", 0)
                 or source.get("cacheReadInputTokens", 0)
                 or 0
@@ -214,6 +241,10 @@ class DataConverter:
             data.get("Model"),
             data.get("usage", {}).get("model"),
             data.get("request", {}).get("model"),
+            data.get("payload", {}).get("model"),
+            data.get("payload", {}).get("info", {}).get("model"),
+            data.get("payload", {}).get("info", {}).get("metadata", {}).get("model"),
+            data.get("context", {}).get("model"),
         ]
 
         for candidate in model_candidates:

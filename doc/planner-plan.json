@@ -1,0 +1,768 @@
+{
+  "plan_id": "bb6fe2b0-5b6e-46c7-940a-f82a29faffaf",
+  "created_at": "2026-03-01T00:24:24.250450",
+  "frozen_at": null,
+  "overview": {
+    "problem": "c-monitor needs dual-provider monitoring for Claude and OpenAI Codex while lowering runtime memory usage and preserving existing claude-monitor workflows.",
+    "approach": "Execute a measured-first migration: establish provider adapters behind existing CLI interfaces, optimize ingestion and caching for bounded memory, and gate any language rewrite on benchmark thresholds."
+  },
+  "planning_context": {
+    "decisions": [
+      {
+        "id": "DL-001",
+        "version": 1,
+        "decision": "Use measured Python optimization before any language rewrite",
+        "reasoning": "Provider support is urgent and compatibility-sensitive -> streaming parse and bounded caches deliver near-term memory wins with low migration risk -> rewrite only after metrics miss explicit targets"
+      },
+      {
+        "id": "DL-002",
+        "version": 1,
+        "decision": "Introduce provider adapters with a normalized UsageEntry contract",
+        "reasoning": "Claude and Codex telemetry schemas differ in paths and token keys -> adapter boundary isolates source variance -> analyzer and UI stay provider-agnostic"
+      },
+      {
+        "id": "DL-003",
+        "version": 1,
+        "decision": "Adopt streaming JSONL ingestion with bounded dedupe state",
+        "reasoning": "Full raw history materialization scales linearly with file size -> line streaming with capped hash windows keeps working set bounded -> rss_peak remains stable during long sessions"
+      },
+      {
+        "id": "DL-004",
+        "version": 1,
+        "decision": "Use short TTL monitoring cache plus bounded projection memoization",
+        "reasoning": "Realtime refresh repeatedly requests similar aggregates -> tiny TTL cache and bounded projection memoization remove redundant recomputation -> CPU and memory stay predictable"
+      },
+      {
+        "id": "DL-005",
+        "version": 1,
+        "decision": "Keep claude_monitor package path and legacy command aliases through migration",
+        "reasoning": "Existing scripts and habits depend on current entrypoints -> preserving module path and aliases avoids workflow breakage -> provider refactor can ship incrementally"
+      },
+      {
+        "id": "DL-006",
+        "version": 1,
+        "decision": "Gate optional Go or Rust rewrite on benchmark thresholds",
+        "reasoning": "Rewrite cost and backtrack cost are high -> explicit rss_peak rss_p95 and startup thresholds make the decision objective -> language migration triggers only when optimized Python misses gate"
+      },
+      {
+        "id": "DL-007",
+        "version": 1,
+        "decision": "Prioritize integration fixtures over mock-heavy tests for provider rollout",
+        "reasoning": "Provider regressions emerge at parser and orchestration boundaries -> fixture-driven integration tests observe end-to-end behavior -> targeted unit tests remain for token normalization and pricing math"
+      }
+    ],
+    "rejected_alternatives": [
+      {
+        "id": "RA-001",
+        "alternative": "Immediate full language rewrite to Go or Rust",
+        "rejection_reason": "Migration and compatibility risk remains high before measuring optimized Python baseline",
+        "decision_ref": "DL-006"
+      },
+      {
+        "id": "RA-002",
+        "alternative": "Keep monolithic ingestion architecture unchanged",
+        "rejection_reason": "Unbounded parsing and caching behavior cannot meet memory budget targets",
+        "decision_ref": "DL-003"
+      }
+    ],
+    "constraints": [
+      "MUST: use planning workflow output after project setup",
+      "MUST: incorporate deep reasoning and critical evaluation before final recommendation",
+      "SHOULD: preserve compatibility with existing claude-monitor workflows during migration",
+      "SHOULD: base language and framework decisions on measured memory and performance outcomes"
+    ],
+    "risks": [
+      {
+        "id": "R-001",
+        "risk": "Codex transcript variants break parser assumptions and silently drop usage data",
+        "mitigation": "Use fixture matrix across provider variants and enforce normalization tests in CI",
+        "anchor": "src/claude_monitor/data/reader.py",
+        "decision_ref": "DL-002"
+      },
+      {
+        "id": "R-002",
+        "risk": "Memory optimizations regress realtime display latency or compatibility behavior",
+        "mitigation": "Track latency and compatibility regressions in integration tests before release",
+        "anchor": "src/claude_monitor/monitoring/data_manager.py",
+        "decision_ref": "DL-004"
+      },
+      {
+        "id": "R-003",
+        "risk": "Benchmark gate remains ambiguous and blocks release decisions",
+        "mitigation": "Publish explicit rss_peak rss_p95 and startup thresholds with go and no-go criteria",
+        "anchor": "doc/memory-benchmark-plan.md",
+        "decision_ref": "DL-006"
+      }
+    ]
+  },
+  "invisible_knowledge": {
+    "system": "Provider adapters isolate ingestion variability so session analysis and UI layers operate on a stable schema while bounded caches protect memory budget under continuous refresh.",
+    "invariants": [
+      "Reader and adapter paths emit canonical UsageEntry fields before analysis.",
+      "Compatibility aliases continue to launch the same entrypoint during migration.",
+      "Monitoring caches remain bounded and observable through telemetry counters."
+    ],
+    "tradeoffs": [
+      "Measured optimization in Python ships faster and lowers migration risk before any rewrite.",
+      "Provider abstraction adds interface overhead but localizes schema drift and test scope.",
+      "Fixture-heavy integration tests increase setup effort but reduce cross-layer regression risk."
+    ]
+  },
+  "milestones": [
+    {
+      "id": "M-001",
+      "version": 1,
+      "number": 1,
+      "name": "Bootstrap provider contract and compatibility surface",
+      "files": [
+        "pyproject.toml",
+        "README.md",
+        "doc/c-monitor-bootstrap.md",
+        "src/claude_monitor/core/settings.py",
+        "src/claude_monitor/cli/main.py",
+        "src/claude_monitor/core/models.py",
+        "src/claude_monitor/data/provider_registry.py"
+      ],
+      "flags": [
+        "provider-abstraction",
+        "compatibility",
+        "docs"
+      ],
+      "requirements": [
+        "Expose provider selection with claude default",
+        "Preserve existing command aliases and module path contracts",
+        "Define normalized provider adapter interface for downstream analysis"
+      ],
+      "acceptance_criteria": [
+        "Default startup without provider flag preserves Claude monitoring behavior",
+        "Provider codex selection resolves provider paths without runtime failure",
+        "Repository metadata and docs state c-monitor fork goals and compatibility guarantees"
+      ],
+      "tests": [
+        "integration: cli startup default and provider codex fixture paths",
+        "unit: settings validation for provider values and persistence",
+        "regression: alias commands map to unchanged entrypoint"
+      ],
+      "code_intents": [
+        {
+          "id": "CI-M-001-001",
+          "version": 1,
+          "file": "src/claude_monitor/core/settings.py",
+          "function": "Settings",
+          "behavior": "Add provider and provider_data_path settings with strict validation and last-used persistence while keeping claude as default.",
+          "decision_refs": [
+            "DL-002",
+            "DL-005"
+          ]
+        },
+        {
+          "id": "CI-M-001-002",
+          "version": 1,
+          "file": "src/claude_monitor/cli/main.py",
+          "function": "discover_provider_data_paths",
+          "behavior": "Resolve provider-specific default roots and route the selected provider into monitoring initialization without changing existing command aliases.",
+          "decision_refs": [
+            "DL-002",
+            "DL-005"
+          ]
+        },
+        {
+          "id": "CI-M-001-003",
+          "version": 1,
+          "file": "src/claude_monitor/data/provider_registry.py",
+          "function": "get_provider_adapter",
+          "behavior": "Expose adapter lookup for claude and codex providers and return an iterator contract that emits normalized records.",
+          "decision_refs": [
+            "DL-002"
+          ]
+        },
+        {
+          "id": "CI-M-001-004",
+          "version": 1,
+          "file": "README.md",
+          "function": null,
+          "behavior": "Document provider flag usage and migration compatibility commitments for existing claude-monitor workflows.",
+          "decision_refs": [
+            "DL-005"
+          ]
+        },
+        {
+          "id": "CI-M-001-005",
+          "version": 1,
+          "file": "pyproject.toml",
+          "function": null,
+          "behavior": "Keep script aliases and package metadata aligned with c-monitor naming and dual-provider positioning.",
+          "decision_refs": [
+            "DL-005"
+          ]
+        },
+        {
+          "id": "CI-M-001-006",
+          "version": 1,
+          "file": "doc/c-monitor-bootstrap.md",
+          "function": null,
+          "behavior": "Capture measurable objectives and migration guardrails for provider support and memory budget execution.",
+          "decision_refs": [
+            "DL-001",
+            "DL-006"
+          ]
+        }
+      ],
+      "code_changes": [],
+      "documentation": {
+        "module_comment": null,
+        "docstrings": [],
+        "function_blocks": [],
+        "inline_comments": []
+      },
+      "is_documentation_only": false,
+      "delegated_to": null
+    },
+    {
+      "id": "M-002",
+      "version": 1,
+      "number": 2,
+      "name": "Build Codex ingestion and normalization pipeline",
+      "files": [
+        "src/claude_monitor/data/reader.py",
+        "src/claude_monitor/core/data_processors.py",
+        "src/claude_monitor/core/pricing.py",
+        "src/claude_monitor/data/analysis.py",
+        "src/claude_monitor/data/analyzer.py",
+        "src/claude_monitor/utils/model_utils.py",
+        "src/tests/test_data_reader.py",
+        "src/tests/test_analysis.py",
+        "src/tests/test_pricing.py"
+      ],
+      "flags": [
+        "provider-ingestion",
+        "normalization",
+        "pricing"
+      ],
+      "requirements": [
+        "Parse Codex and Claude transcripts into shared UsageEntry fields",
+        "Normalize token and model fields across provider schema variants",
+        "Extend pricing behavior for codex models with deterministic fallback"
+      ],
+      "acceptance_criteria": [
+        "Mixed provider fixtures generate stable blocks and totals in analyze_usage",
+        "Cached and calculated cost modes remain valid for Claude workflows",
+        "Unknown provider model names do not crash and surface fallback behavior"
+      ],
+      "tests": [
+        "integration: analyze_usage with mixed provider fixtures",
+        "unit: token extractor matrix for claude and codex keys",
+        "unit: pricing calculator codex mapping and fallback paths"
+      ],
+      "code_intents": [
+        {
+          "id": "CI-M-002-001",
+          "version": 1,
+          "file": "src/claude_monitor/data/reader.py",
+          "function": "load_usage_entries",
+          "behavior": "Stream provider records through adapters and emit normalized UsageEntry rows without retaining full raw history in memory.",
+          "decision_refs": [
+            "DL-002",
+            "DL-003"
+          ]
+        },
+        {
+          "id": "CI-M-002-002",
+          "version": 1,
+          "file": "src/claude_monitor/core/data_processors.py",
+          "function": "TokenExtractor.extract_tokens",
+          "behavior": "Recognize claude and codex token key variants and return canonical input output and cache token counts.",
+          "decision_refs": [
+            "DL-002"
+          ]
+        },
+        {
+          "id": "CI-M-002-003",
+          "version": 1,
+          "file": "src/claude_monitor/core/pricing.py",
+          "function": "PricingCalculator._get_pricing_for_model",
+          "behavior": "Map normalized codex models to pricing tables and preserve deterministic fallback behavior for unknown names.",
+          "decision_refs": [
+            "DL-002"
+          ]
+        },
+        {
+          "id": "CI-M-002-004",
+          "version": 1,
+          "file": "src/claude_monitor/data/analysis.py",
+          "function": "analyze_usage",
+          "behavior": "Build session blocks from normalized provider entries while minimizing duplicate raw-entry collections.",
+          "decision_refs": [
+            "DL-003"
+          ]
+        },
+        {
+          "id": "CI-M-002-005",
+          "version": 1,
+          "file": "src/claude_monitor/data/analyzer.py",
+          "function": "SessionAnalyzer.detect_limits",
+          "behavior": "Retain Claude limit detection semantics and isolate provider-specific limit parsing hooks.",
+          "decision_refs": [
+            "DL-005"
+          ]
+        },
+        {
+          "id": "CI-M-002-006",
+          "version": 1,
+          "file": "src/tests/test_data_reader.py",
+          "function": null,
+          "behavior": "Add mixed provider fixture coverage for parsing and dedupe behavior.",
+          "decision_refs": [
+            "DL-007"
+          ]
+        },
+        {
+          "id": "CI-M-002-007",
+          "version": 1,
+          "file": "src/tests/test_analysis.py",
+          "function": null,
+          "behavior": "Verify end-to-end block generation and totals from mixed provider datasets.",
+          "decision_refs": [
+            "DL-007"
+          ]
+        },
+        {
+          "id": "CI-M-002-008",
+          "version": 1,
+          "file": "src/tests/test_pricing.py",
+          "function": null,
+          "behavior": "Cover codex model pricing and fallback pathways alongside existing Claude cases.",
+          "decision_refs": [
+            "DL-007"
+          ]
+        }
+      ],
+      "code_changes": [],
+      "documentation": {
+        "module_comment": null,
+        "docstrings": [],
+        "function_blocks": [],
+        "inline_comments": []
+      },
+      "is_documentation_only": false,
+      "delegated_to": null
+    },
+    {
+      "id": "M-003",
+      "version": 1,
+      "number": 3,
+      "name": "Enforce memory budget and runtime observability",
+      "files": [
+        "src/claude_monitor/monitoring/data_manager.py",
+        "src/claude_monitor/monitoring/orchestrator.py",
+        "src/claude_monitor/core/p90_calculator.py",
+        "src/claude_monitor/data/aggregator.py",
+        "src/claude_monitor/ui/display_controller.py",
+        "src/tests/test_monitoring_orchestrator.py",
+        "src/tests/test_calculations.py",
+        "src/tests/test_cli_main.py",
+        "src/tests/test_aggregator.py",
+        "src/tests/test_display_controller.py"
+      ],
+      "flags": [
+        "memory-budget",
+        "performance",
+        "telemetry"
+      ],
+      "requirements": [
+        "Cap in-process cache growth under continuous refresh loops",
+        "Collect rss_peak and rss_p95 metrics for representative workloads",
+        "Keep realtime and table output fields stable for Claude compatibility"
+      ],
+      "acceptance_criteria": [
+        "Long-running monitor loop maintains bounded cache state",
+        "Benchmark fixture run records rss_peak and rss_p95 below target threshold",
+        "Realtime output preserves existing key fields and notifications"
+      ],
+      "tests": [
+        "integration: orchestrator long-run fixture with bounded cache assertions",
+        "benchmark: memory profile scenario with reproducible command",
+        "regression: display parity tests for realtime and table views"
+      ],
+      "code_intents": [
+        {
+          "id": "CI-M-003-001",
+          "version": 1,
+          "file": "src/claude_monitor/monitoring/data_manager.py",
+          "function": "DataManager",
+          "behavior": "Bound cache payload retention and expose cache-age metrics that support memory telemetry.",
+          "decision_refs": [
+            "DL-003",
+            "DL-004"
+          ]
+        },
+        {
+          "id": "CI-M-003-002",
+          "version": 1,
+          "file": "src/claude_monitor/data/aggregator.py",
+          "function": "UsageAggregator.aggregate",
+          "behavior": "Aggregate from streaming or iterator inputs without duplicate list materialization for long histories.",
+          "decision_refs": [
+            "DL-003"
+          ]
+        },
+        {
+          "id": "CI-M-003-003",
+          "version": 1,
+          "file": "src/claude_monitor/core/p90_calculator.py",
+          "function": "P90Calculator",
+          "behavior": "Use bounded memoization keyed by workload slice so custom limit computation remains memory stable.",
+          "decision_refs": [
+            "DL-004"
+          ]
+        },
+        {
+          "id": "CI-M-003-004",
+          "version": 1,
+          "file": "src/claude_monitor/monitoring/orchestrator.py",
+          "function": "_fetch_and_process_data",
+          "behavior": "Emit fetch and memory telemetry while preserving robust fallback behavior during transient parse failures.",
+          "decision_refs": [
+            "DL-004",
+            "DL-006"
+          ]
+        },
+        {
+          "id": "CI-M-003-005",
+          "version": 1,
+          "file": "src/claude_monitor/ui/display_controller.py",
+          "function": "create_data_display",
+          "behavior": "Render from aggregated monitoring payloads without duplicating large entry structures in UI assembly.",
+          "decision_refs": [
+            "DL-003",
+            "DL-004"
+          ]
+        },
+        {
+          "id": "CI-M-003-006",
+          "version": 1,
+          "file": "src/tests/test_monitoring_orchestrator.py",
+          "function": null,
+          "behavior": "Assert bounded cache behavior and telemetry emission in repeated monitoring cycles.",
+          "decision_refs": [
+            "DL-007"
+          ]
+        },
+        {
+          "id": "CI-M-003-007",
+          "version": 1,
+          "file": "src/tests/test_display_controller.py",
+          "function": null,
+          "behavior": "Confirm realtime rendering parity and notification behavior after memory optimizations.",
+          "decision_refs": [
+            "DL-007"
+          ]
+        },
+        {
+          "id": "CI-M-003-008",
+          "version": 1,
+          "file": "src/tests/test_cli_main.py",
+          "function": null,
+          "behavior": "Validate provider routing and alias compatibility in startup flows.",
+          "decision_refs": [
+            "DL-007"
+          ]
+        }
+      ],
+      "code_changes": [],
+      "documentation": {
+        "module_comment": null,
+        "docstrings": [],
+        "function_blocks": [],
+        "inline_comments": []
+      },
+      "is_documentation_only": false,
+      "delegated_to": null
+    },
+    {
+      "id": "M-004",
+      "version": 1,
+      "number": 4,
+      "name": "Define migration gate and operating playbook",
+      "files": [
+        "doc/memory-benchmark-plan.md",
+        "doc/provider-compatibility-matrix.md",
+        "DEVELOPMENT.md",
+        "CHANGELOG.md",
+        "src/tests/examples/api_examples.py"
+      ],
+      "flags": [
+        "migration-gate",
+        "documentation",
+        "operability"
+      ],
+      "requirements": [
+        "Document benchmark workloads and pass fail thresholds for rss metrics",
+        "Publish provider compatibility matrix with fallback semantics",
+        "Define go no-go gate for optional language migration"
+      ],
+      "acceptance_criteria": [
+        "Migration decision criteria cite explicit measured thresholds",
+        "Contributor guide includes reproducible benchmark and compatibility commands",
+        "Release notes capture fork baseline and rollout checkpoints"
+      ],
+      "tests": [
+        "docs-check: markdown links and commands validated in CI smoke flow",
+        "integration: api examples run for claude and codex fixture inputs"
+      ],
+      "code_intents": [
+        {
+          "id": "CI-M-004-001",
+          "version": 1,
+          "file": "doc/memory-benchmark-plan.md",
+          "function": null,
+          "behavior": "Specify workload matrix and rss_peak rss_p95 thresholds that gate rewrite decisions.",
+          "decision_refs": [
+            "DL-001",
+            "DL-006"
+          ]
+        },
+        {
+          "id": "CI-M-004-002",
+          "version": 1,
+          "file": "doc/provider-compatibility-matrix.md",
+          "function": null,
+          "behavior": "List supported provider fields and fallback mappings for claude and codex ingestion.",
+          "decision_refs": [
+            "DL-002",
+            "DL-005"
+          ]
+        },
+        {
+          "id": "CI-M-004-003",
+          "version": 1,
+          "file": "DEVELOPMENT.md",
+          "function": null,
+          "behavior": "Document benchmark and compatibility command sequence required before release.",
+          "decision_refs": [
+            "DL-006",
+            "DL-007"
+          ]
+        },
+        {
+          "id": "CI-M-004-004",
+          "version": 1,
+          "file": "CHANGELOG.md",
+          "function": null,
+          "behavior": "Capture fork baseline and phased delivery checkpoints for provider and memory milestones.",
+          "decision_refs": [
+            "DL-005"
+          ]
+        },
+        {
+          "id": "CI-M-004-005",
+          "version": 1,
+          "file": "src/tests/examples/api_examples.py",
+          "function": null,
+          "behavior": "Provide fixture-driven usage examples for both provider modes and memory benchmark hooks.",
+          "decision_refs": [
+            "DL-007"
+          ]
+        }
+      ],
+      "code_changes": [],
+      "documentation": {
+        "module_comment": null,
+        "docstrings": [],
+        "function_blocks": [],
+        "inline_comments": []
+      },
+      "is_documentation_only": false,
+      "delegated_to": null
+    }
+  ],
+  "waves": [
+    {
+      "id": "W-001",
+      "milestones": [
+        "M-001"
+      ]
+    },
+    {
+      "id": "W-002",
+      "milestones": [
+        "M-002"
+      ]
+    },
+    {
+      "id": "W-003",
+      "milestones": [
+        "M-003",
+        "M-004"
+      ]
+    }
+  ],
+  "diagram_graphs": [
+    {
+      "id": "DIAG-001",
+      "type": "architecture",
+      "scope": "overview",
+      "title": "Provider-Aware Monitoring Architecture",
+      "nodes": [
+        {
+          "id": "cli",
+          "label": "CLI Entry",
+          "type": "interface"
+        },
+        {
+          "id": "path_resolver",
+          "label": "Provider Path Resolver",
+          "type": "service"
+        },
+        {
+          "id": "adapters",
+          "label": "Provider Adapters",
+          "type": "service"
+        },
+        {
+          "id": "stream_reader",
+          "label": "Streaming Reader",
+          "type": "pipeline"
+        },
+        {
+          "id": "session_analysis",
+          "label": "Session Analyzer",
+          "type": "pipeline"
+        },
+        {
+          "id": "cache_layer",
+          "label": "Bounded Cache Layer",
+          "type": "service"
+        },
+        {
+          "id": "ui",
+          "label": "Realtime and Table UI",
+          "type": "interface"
+        }
+      ],
+      "edges": [
+        {
+          "source": "cli",
+          "target": "path_resolver",
+          "label": "resolve data roots",
+          "protocol": null
+        },
+        {
+          "source": "path_resolver",
+          "target": "adapters",
+          "label": "select provider adapter",
+          "protocol": null
+        },
+        {
+          "source": "adapters",
+          "target": "stream_reader",
+          "label": "yield normalized records",
+          "protocol": null
+        },
+        {
+          "source": "stream_reader",
+          "target": "session_analysis",
+          "label": "build session blocks",
+          "protocol": null
+        },
+        {
+          "source": "session_analysis",
+          "target": "cache_layer",
+          "label": "publish aggregates",
+          "protocol": null
+        },
+        {
+          "source": "cache_layer",
+          "target": "ui",
+          "label": "serve monitoring payload",
+          "protocol": null
+        },
+        {
+          "source": "ui",
+          "target": "cli",
+          "label": "render terminal output",
+          "protocol": null
+        }
+      ],
+      "ascii_render": null
+    },
+    {
+      "id": "DIAG-002",
+      "type": "dataflow",
+      "scope": "invisible_knowledge",
+      "title": "Memory Budget Data Flow",
+      "nodes": [
+        {
+          "id": "jsonl",
+          "label": "Provider JSONL Sources",
+          "type": "storage"
+        },
+        {
+          "id": "line_parse",
+          "label": "Line Parser",
+          "type": "pipeline"
+        },
+        {
+          "id": "dedupe",
+          "label": "Bounded Dedupe Window",
+          "type": "cache"
+        },
+        {
+          "id": "blocks",
+          "label": "Session Block Builder",
+          "type": "pipeline"
+        },
+        {
+          "id": "ttl",
+          "label": "TTL Snapshot Cache",
+          "type": "cache"
+        },
+        {
+          "id": "display",
+          "label": "Display Renderer",
+          "type": "interface"
+        }
+      ],
+      "edges": [
+        {
+          "source": "jsonl",
+          "target": "line_parse",
+          "label": "read event lines",
+          "protocol": null
+        },
+        {
+          "source": "line_parse",
+          "target": "dedupe",
+          "label": "normalize and hash",
+          "protocol": null
+        },
+        {
+          "source": "dedupe",
+          "target": "blocks",
+          "label": "forward unique records",
+          "protocol": null
+        },
+        {
+          "source": "blocks",
+          "target": "ttl",
+          "label": "store aggregate snapshot",
+          "protocol": null
+        },
+        {
+          "source": "ttl",
+          "target": "display",
+          "label": "serve cached view data",
+          "protocol": null
+        },
+        {
+          "source": "display",
+          "target": "jsonl",
+          "label": "refresh trigger loop",
+          "protocol": null
+        }
+      ],
+      "ascii_render": null
+    }
+  ],
+  "readme_entries": []
+}
